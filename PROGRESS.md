@@ -62,12 +62,25 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 - `last_frame_time: Option<Instant>` initialised to `None`; first frame fires immediately.
 - `GpuState::upload_frame` called before `render` each `RedrawRequested` so the texture is always current before the draw.
 
+---
+
+## M5 — Normalization modes ✅
+
+**Files:** `src/norm.rs` (new), `src/app.rs`, `src/main.rs`
+
+- Four normalization modes, selectable at runtime with the `N` key (cycles in order):
+  - **Global** — vmin/vmax scanned once across all frames on load; default.  Stable colours across the whole animation; best for comparing frame-to-frame magnitudes.
+  - **Per-frame** — vmin/vmax computed from each frame independently; always uses the full colormap range.  Good for visualising shape without caring about absolute magnitude.
+  - **Percentile** — 2nd/98th percentile of the current frame; clips outliers.  Useful for fields with rare spikes that would otherwise compress the interesting range.
+  - **Fixed** — explicit (vmin, vmax) stored in `App::fixed_range`; no runtime computation.  For when the caller knows the physical range in advance (e.g. an E-field with a known maximum).
+- `NormMode` lives in `src/norm.rs`; `norm::global_range()` scans frames once in `resumed()`; `norm::frame_range()` is called per redraw.
+- A degenerate range (`|max−min| < 1e-9`) is expanded to `(min, min+1)` to prevent shader divide-by-zero.
+- Window title updated live to show the active mode (e.g. `wgpu_animator — norm: per-frame`).
+
 ## Upcoming
 
 | # | Goal |
 |---|---|
-| M5 | Normalization modes (global, per-frame, percentile) |
-| M5 | Normalization modes (global, per-frame, percentile) |
 | M6 | Interpolation switch (nearest → linear → bicubic) |
 | M7 | egui axis labels + colorbar ticks |
 | M8 | Zoom / pan |

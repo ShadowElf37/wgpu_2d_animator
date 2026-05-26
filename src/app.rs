@@ -11,6 +11,7 @@ use winit::{
 };
 
 use crate::colormap::Colormap;
+use crate::norm::{self, NormMode};
 use crate::renderer::GpuState;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,9 +48,11 @@ pub struct App {
     frames:          Vec<Vec<f32>>,
     frame_idx:       usize,
     fps:             f64,
-    // Next absolute time at which to advance to the next animation frame.
-    // Nil until the first RedrawRequested fires.
     next_anim_frame: Option<Instant>,
+    norm_mode:       NormMode,
+    global_range:    (f32, f32),
+    // Fixed range exposed for future UI use; matches test-data bounds for now.
+    fixed_range:     (f32, f32),
 }
 
 impl Default for App {
@@ -61,6 +64,20 @@ impl Default for App {
             frame_idx:       0,
             fps:             FPS,
             next_anim_frame: None,
+            norm_mode:       NormMode::default(),
+            global_range:    (0.0, 1.0),
+            fixed_range:     (0.0, 1.0),
+        }
+    }
+}
+
+impl App {
+    fn update_title(&self) {
+        if let Some(w) = &self.window {
+            w.set_title(&format!(
+                "wgpu_animator — norm: {}",
+                self.norm_mode.label()
+            ));
         }
     }
 }
@@ -68,7 +85,7 @@ impl Default for App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
-            .with_title("wgpu_animator — M4")
+            .with_title("wgpu_animator — M5")
             .with_inner_size(LogicalSize::new(900u32, 800u32));
 
         let window = Arc::new(
@@ -77,20 +94,23 @@ impl ApplicationHandler for App {
 
         let mut gpu = GpuState::new(Arc::clone(&window)).expect("failed to init wgpu");
 
-        self.frames = orbit_frames();
-        gpu.init_data(W, H, &self.frames[0], 0.0, 1.0, Colormap::Heat);
+        self.frames      = orbit_frames();
+        self.global_range = norm::global_range(&self.frames);
+
+        let (vmin, vmax) = norm::frame_range(
+            &self.frames[0], self.norm_mode, self.global_range, self.fixed_range,
+        );
+        gpu.init_data(W, H, &self.frames[0], vmin, vmax, Colormap::Heat);
 
         self.window          = Some(window);
         self.gpu             = Some(gpu);
         self.frame_idx       = 0;
         self.next_anim_frame = None;
 
+        self.update_title();
         self.window.as_ref().unwrap().request_redraw();
     }
 
-    // Request a redraw every time the queue drains.  PresentMode::Fifo in
-    // render() blocks at vsync, so this loop naturally runs at the display
-    // refresh rate — no software WaitUntil timer needed or wanted.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(w) = &self.window { w.request_redraw(); }
     }
@@ -109,15 +129,26 @@ impl ApplicationHandler for App {
                 ..
             } => event_loop.exit(),
 
+            // N — cycle normalization mode
+            WindowEvent::KeyboardInput {
+                event: KeyEvent {
+                    logical_key: Key::Character(ref ch),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+                ..
+            } if ch.as_str() == "n" || ch.as_str() == "N" => {
+                self.norm_mode = self.norm_mode.next();
+                log::info!("norm mode: {}", self.norm_mode.label());
+                self.update_title();
+            }
+
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu { gpu.resize(size); }
             }
 
             WindowEvent::RedrawRequested => {
                 // ── Animation frame advance ───────────────────────────────
-                // Rendered at vsync rate (e.g. 60 Hz); animation advances at
-                // self.fps (e.g. 30 fps).  The same animation frame is uploaded
-                // for multiple display frames — no timer, no WaitUntil jitter.
                 if !self.frames.is_empty() {
                     let now = Instant::now();
                     let frame_duration = Duration::from_secs_f64(1.0 / self.fps);
@@ -125,7 +156,6 @@ impl ApplicationHandler for App {
                     if now >= *due {
                         self.frame_idx = (self.frame_idx + 1) % self.frames.len();
                         *due += frame_duration;
-                        // If fallen more than one frame behind, snap forward.
                         if *due < now { *due = now + frame_duration; }
                     }
                 }
@@ -133,7 +163,11 @@ impl ApplicationHandler for App {
                 // ── Upload + render ───────────────────────────────────────
                 if let Some(gpu) = &mut self.gpu {
                     if !self.frames.is_empty() {
-                        gpu.upload_frame(&self.frames[self.frame_idx], 0.0, 1.0);
+                        let frame = &self.frames[self.frame_idx];
+                        let (vmin, vmax) = norm::frame_range(
+                            frame, self.norm_mode, self.global_range, self.fixed_range,
+                        );
+                        gpu.upload_frame(frame, vmin, vmax);
                     }
                     match gpu.render() {
                         Ok(()) => {}
