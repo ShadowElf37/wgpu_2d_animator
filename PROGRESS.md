@@ -33,6 +33,25 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 
 ---
 
+## M3 — Colormap LUT texture + built-in maps ✅
+
+**Files:** `src/colormap.rs` (new), `src/renderer.rs`, `src/shaders/data.wgsl`
+
+- Replaced inline `heat()` fragment shader function with a 256-entry **Rgba8Unorm 1D LUT texture** sampled with `textureSample`.  Using a filterable format gives smooth linear interpolation between LUT entries at no extra cost.
+- Five built-in colormaps defined as piecewise-linear RGB stops in `colormap.rs`:
+  - **Heat** — black → red → white (previous behaviour, still default)
+  - **Inferno** — black → purple → orange → yellow (perceptually uniform)
+  - **Viridis** — deep purple → teal → yellow (perceptually uniform)
+  - **RdBu** — red → neutral grey → blue (diverging; useful for signed fields like Hz)
+  - **Grayscale** — black → white
+- `Colormap::lut_rgba8()` linearly interpolates between stops and returns 1024 raw bytes ready for `queue.write_texture`.
+- `DataPipeline::set_colormap()` re-uploads only the LUT bytes — no pipeline recreation needed when the colormap is changed at runtime.
+- Bind group layout gained two new entries: binding 2 (filterable 1D texture), binding 3 (filtering sampler, `ClampToEdge`, `Linear`).
+- `GpuState::init_data` now accepts a `Colormap` argument; `GpuState::set_colormap` exposes hot-swap for future UI use.
+- R32Float data texture (non-filterable) still uses `textureLoad` with integer coordinates.
+
+---
+
 ## Upcoming
 
 | # | Goal |

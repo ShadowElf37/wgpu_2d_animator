@@ -2,6 +2,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use winit::window::Window;
 
+use crate::colormap::Colormap;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Uniforms — matches the WGSL struct in data.wgsl exactly (16 bytes)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,25 +19,30 @@ struct Uniforms {
 // ─────────────────────────────────────────────────────────────────────────────
 // DataPipeline
 //
-// Owns the render pipeline, the R32Float data texture, and the uniform buffer
-// that carries vmin/vmax to the shader.  Created once; reused every frame.
+// Owns the render pipeline, the R32Float data texture, a 1D Rgba8Unorm
+// colormap LUT texture with linear sampler, and the vmin/vmax uniform buffer.
+// Created once per colormap change; reused every frame.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DataPipeline {
-    pipeline:    wgpu::RenderPipeline,
-    bind_group:  wgpu::BindGroup,
-    uniform_buf: wgpu::Buffer,
-    texture:     wgpu::Texture,
-    pub width:   u32,
-    pub height:  u32,
+    pipeline:      wgpu::RenderPipeline,
+    bind_group:    wgpu::BindGroup,
+    uniform_buf:   wgpu::Buffer,
+    texture:       wgpu::Texture,
+    cmap_texture:  wgpu::Texture,
+    _cmap_sampler: wgpu::Sampler,
+    pub width:     u32,
+    pub height:    u32,
 }
 
 impl DataPipeline {
     pub fn new(
         device:         &wgpu::Device,
+        queue:          &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         width:          u32,
         height:         u32,
+        colormap:       Colormap,
     ) -> Self {
         // ── Shader ───────────────────────────────────────────────────────
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -47,7 +54,9 @@ impl DataPipeline {
 
         // ── Bind group layout ─────────────────────────────────────────────
         // binding 0: uniform buffer (vmin, vmax)
-        // binding 1: R32Float texture (non-filterable → textureLoad in shader)
+        // binding 1: R32Float data texture (non-filterable → textureLoad)
+        // binding 2: Rgba8Unorm colormap LUT 1D texture (filterable)
+        // binding 3: linear sampler for the LUT
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label:   Some("data bgl"),
             entries: &[
@@ -73,6 +82,22 @@ impl DataPipeline {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D1,
+                        multisampled:   false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding:    3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -91,7 +116,7 @@ impl DataPipeline {
             vertex: wgpu::VertexState {
                 module:              &shader,
                 entry_point:         "vs_main",
-                buffers:             &[],   // vertices generated from vertex_index in shader
+                buffers:             &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -114,7 +139,7 @@ impl DataPipeline {
             cache:         None,
         });
 
-        // ── Texture ───────────────────────────────────────────────────────
+        // ── Data texture (R32Float, 2D) ───────────────────────────────────
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label:           Some("data texture"),
             size:            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -125,7 +150,35 @@ impl DataPipeline {
             usage:           wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats:    &[],
         });
-        let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let data_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // ── Colormap LUT texture (Rgba8Unorm, 1D, filterable) ─────────────
+        let cmap_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label:           Some("colormap LUT"),
+            size:            wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count:    1,
+            dimension:       wgpu::TextureDimension::D1,
+            format:          wgpu::TextureFormat::Rgba8Unorm,
+            usage:           wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats:    &[],
+        });
+        let cmap_view = cmap_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D1),
+            ..Default::default()
+        });
+
+        // Upload initial LUT data.
+        Self::write_lut(queue, &cmap_texture, colormap);
+
+        // ── Colormap sampler (linear, clamp-to-edge) ──────────────────────
+        let cmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label:            Some("cmap sampler"),
+            address_mode_u:   wgpu::AddressMode::ClampToEdge,
+            mag_filter:       wgpu::FilterMode::Linear,
+            min_filter:       wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         // ── Uniform buffer ────────────────────────────────────────────────
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -146,12 +199,53 @@ impl DataPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding:  1,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
+                    resource: wgpu::BindingResource::TextureView(&data_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding:  2,
+                    resource: wgpu::BindingResource::TextureView(&cmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding:  3,
+                    resource: wgpu::BindingResource::Sampler(&cmap_sampler),
                 },
             ],
         });
 
-        Self { pipeline, bind_group, uniform_buf, texture, width, height }
+        Self {
+            pipeline,
+            bind_group,
+            uniform_buf,
+            texture,
+            cmap_texture,
+            _cmap_sampler: cmap_sampler,
+            width,
+            height,
+        }
+    }
+
+    /// Swap to a different colormap without recreating the pipeline.
+    pub fn set_colormap(&self, queue: &wgpu::Queue, colormap: Colormap) {
+        Self::write_lut(queue, &self.cmap_texture, colormap);
+    }
+
+    fn write_lut(queue: &wgpu::Queue, tex: &wgpu::Texture, colormap: Colormap) {
+        let lut = colormap.lut_rgba8();
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture:   tex,
+                mip_level: 0,
+                origin:    wgpu::Origin3d::ZERO,
+                aspect:    wgpu::TextureAspect::All,
+            },
+            &lut,
+            wgpu::ImageDataLayout {
+                offset:         0,
+                bytes_per_row:  Some(256 * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        );
     }
 
     /// Upload a new frame and update the normalization range.
@@ -167,7 +261,7 @@ impl DataPipeline {
             bytemuck::cast_slice(data),
             wgpu::ImageDataLayout {
                 offset:         0,
-                bytes_per_row:  Some(self.width * 4),   // 4 bytes per f32
+                bytes_per_row:  Some(self.width * 4),
                 rows_per_image: Some(self.height),
             },
             wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
@@ -183,7 +277,7 @@ impl DataPipeline {
     pub fn draw<'rp>(&'rp self, pass: &mut wgpu::RenderPass<'rp>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..6, 0..1);   // 6 vertices (TriangleList, 2 triangles), 1 instance
+        pass.draw(0..6, 0..1);
     }
 }
 
@@ -252,8 +346,18 @@ impl GpuState {
     }
 
     /// Create the data pipeline for a fixed grid size and upload the first frame.
-    pub fn init_data(&mut self, width: u32, height: u32, data: &[f32], vmin: f32, vmax: f32) {
-        let dp = DataPipeline::new(&self.device, self.config.format, width, height);
+    pub fn init_data(
+        &mut self,
+        width:    u32,
+        height:   u32,
+        data:     &[f32],
+        vmin:     f32,
+        vmax:     f32,
+        colormap: Colormap,
+    ) {
+        let dp = DataPipeline::new(
+            &self.device, &self.queue, self.config.format, width, height, colormap,
+        );
         dp.upload(&self.queue, data, vmin, vmax);
         self.data_pipeline = Some(dp);
     }
@@ -262,6 +366,13 @@ impl GpuState {
     pub fn upload_frame(&self, data: &[f32], vmin: f32, vmax: f32) {
         if let Some(dp) = &self.data_pipeline {
             dp.upload(&self.queue, data, vmin, vmax);
+        }
+    }
+
+    /// Swap the colormap without recreating the pipeline.
+    pub fn set_colormap(&self, colormap: Colormap) {
+        if let Some(dp) = &self.data_pipeline {
+            dp.set_colormap(&self.queue, colormap);
         }
     }
 

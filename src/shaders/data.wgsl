@@ -1,16 +1,18 @@
 // data.wgsl
 // Full-screen quad that reads a 2D R32Float data texture and maps each
-// value through the heat colormap (black → red → white).
+// value through a 1D RGBA8 colormap LUT (256 entries, filterable).
 
-// ── Uniforms ─────────────────────────────────────────────────────────────────
+// ── Uniforms ──────────────────────────────────────────────────────────────────
 struct Uniforms {
     vmin: f32,
     vmax: f32,
     _pad: vec2<f32>,   // pad to 16 bytes for uniform buffer alignment
 };
 
-@group(0) @binding(0) var<uniform> u:        Uniforms;
-@group(0) @binding(1) var          data_tex: texture_2d<f32>;
+@group(0) @binding(0) var<uniform> u:         Uniforms;
+@group(0) @binding(1) var          data_tex:  texture_2d<f32>;
+@group(0) @binding(2) var          cmap_tex:  texture_1d<f32>;
+@group(0) @binding(3) var          cmap_samp: sampler;
 
 // ── Vertex shader ─────────────────────────────────────────────────────────────
 // Generates a full-screen quad from vertex index alone (no vertex buffer).
@@ -54,22 +56,10 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
     return out;
 }
 
-// ── Colormap ──────────────────────────────────────────────────────────────────
-// Heat: black → red → white via three piecewise-linear ramps.
-//   t ∈ [0.0, 0.5] : r ramps 0→1, g and b stay 0   (black → red)
-//   t ∈ [0.5, 1.0] : g and b ramp 0→1, r stays 1   (red → white)
-fn heat(t: f32) -> vec3<f32> {
-    return vec3<f32>(
-        clamp(t * 2.0,       0.0, 1.0),
-        clamp(t * 2.0 - 1.0, 0.0, 1.0),
-        clamp(t * 2.0 - 1.0, 0.0, 1.0),
-    );
-}
-
 // ── Fragment shader ───────────────────────────────────────────────────────────
-// textureLoad (integer coords) instead of textureSample: R32Float is
-// non-filterable on Metal/Vulkan without an optional feature flag.
-// Nearest-neighbour is correct for now; interpolation is added at M6.
+// textureLoad (integer coords) for the data texture: R32Float is non-filterable
+// on Metal/Vulkan without an optional feature.  The colormap LUT is Rgba8Unorm
+// (filterable), so textureSample gives linear interpolation between LUT entries.
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let dims  = vec2<i32>(textureDimensions(data_tex));
@@ -80,5 +70,6 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     );
     let raw = textureLoad(data_tex, coord, 0).r;
     let t   = clamp((raw - u.vmin) / (u.vmax - u.vmin), 0.0, 1.0);
-    return vec4<f32>(heat(t), 1.0);
+    let col = textureSample(cmap_tex, cmap_samp, t);
+    return vec4<f32>(col.rgb, 1.0);
 }

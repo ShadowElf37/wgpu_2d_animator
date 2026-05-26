@@ -1,4 +1,5 @@
 mod app;
+mod colormap;
 mod renderer;
 
 use winit::event_loop::EventLoop;

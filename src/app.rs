@@ -9,6 +9,7 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
+use crate::colormap::Colormap;
 use crate::renderer::GpuState;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ impl ApplicationHandler for App {
 
         // Upload the Gaussian test frame so there is visible data immediately.
         let frame = gaussian_test_frame();
-        gpu.init_data(W, H, &frame, 0.0, 1.0);
+        gpu.init_data(W, H, &frame, 0.0, 1.0, Colormap::Heat);
 
         self.window = Some(window);
         self.gpu    = Some(gpu);
