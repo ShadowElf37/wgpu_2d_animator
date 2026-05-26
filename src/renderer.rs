@@ -293,6 +293,7 @@ pub struct GpuState {
     queue:         wgpu::Queue,
     config:        wgpu::SurfaceConfiguration,
     data_pipeline: Option<DataPipeline>,
+    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl GpuState {
@@ -343,7 +344,9 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
-        Ok(Self { _window: window, surface, device, queue, config, data_pipeline: None })
+        let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
+
+        Ok(Self { _window: window, surface, device, queue, config, data_pipeline: None, egui_renderer })
     }
 
     /// Create the data pipeline for a fixed grid size and upload the first frame.
@@ -385,7 +388,12 @@ impl GpuState {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(
+        &mut self,
+        paint_jobs:     &[egui::ClippedPrimitive],
+        textures_delta: &egui::TexturesDelta,
+        screen_desc:    egui_wgpu::ScreenDescriptor,
+    ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         // Explicitly set the view format to match the surface config.
         // On macOS/Metal the swapchain texture's internal format can differ from
@@ -396,10 +404,20 @@ impl GpuState {
             ..Default::default()
         });
 
+        // Upload egui texture changes and vertex/index buffers.
+        for (id, delta) in &textures_delta.set {
+            self.egui_renderer.update_texture(&self.device, &self.queue, *id, delta);
+        }
+
         let mut enc = self.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("frame") },
         );
 
+        self.egui_renderer.update_buffers(
+            &self.device, &self.queue, &mut enc, paint_jobs, &screen_desc,
+        );
+
+        // ── Data pass (clear → draw data) ────────────────────────────────────
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("data pass"),
@@ -415,10 +433,36 @@ impl GpuState {
                 timestamp_writes:         None,
                 occlusion_query_set:      None,
             });
-
             if let Some(dp) = &self.data_pipeline {
                 dp.draw(&mut pass);
             }
+        }
+
+        // ── egui pass (load → composite UI on top) ────────────────────────────
+        // egui_wgpu::Renderer::render requires RenderPass<'static>; wgpu 22
+        // provides forget_lifetime() for exactly this use case (egui owns all
+        // resources referenced by the pass, so 'static is safe).
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view:           &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load:  wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes:         None,
+                occlusion_query_set:      None,
+            }).forget_lifetime();
+            self.egui_renderer.render(&mut pass, paint_jobs, &screen_desc);
+        }
+
+        // Free egui textures that are no longer needed.
+        for id in &textures_delta.free {
+            self.egui_renderer.free_texture(id);
         }
 
         self.queue.submit(std::iter::once(enc.finish()));

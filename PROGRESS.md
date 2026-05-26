@@ -92,11 +92,24 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 - `InterpMode` enum in `src/interp.rs`; `as_u32()` maps to the shader constants (0/1/2).
 - Window title now shows both active modes: `wgpu_animator — norm: global | interp: nearest`.
 
+---
+
+## M7 — egui overlay: colorbar + axis tick labels ✅
+
+**Files:** `src/ui.rs` (new), `src/renderer.rs`, `src/app.rs`, `src/main.rs`, `Cargo.toml`
+
+- Added `egui 0.29` / `egui-wgpu 0.29` / `egui-winit 0.29` (all compatible with wgpu 22).
+- **Colorbar** — `egui::SidePanel::right` (84 px), custom-painted 64-strip gradient (bottom=vmin, top=vmax) plus 5 tick marks with `{:.3}` value labels.  Background matches the wgpu clear colour `(0.05, 0.05, 0.12)`.
+- **Axis tick labels** — 6 ticks at 0–100 % along the bottom and left edges of the central panel, painted semi-transparently over the data.
+- Render order: data pass (`LoadOp::Clear`) → egui pass (`LoadOp::Load`).  `egui_wgpu::Renderer::render` requires `RenderPass<'static>`; wgpu 22 provides `RenderPass::forget_lifetime()` for exactly this (egui owns all GPU resources referenced by the pass).
+- All `WindowEvent`s are forwarded to `egui_winit::State` before our own handling; N / I / Escape don't conflict with egui's input model.
+- `App` gains `egui_ctx: egui::Context` (in `default()`) and `egui_winit: Option<State>` (in `resumed()` once the window exists).
+- `GpuState::render` now takes `paint_jobs`, `textures_delta`, `screen_desc`; the egui renderer lives in `GpuState.egui_renderer`.
+
 ## Upcoming
 
 | # | Goal |
 |---|---|
-| M7 | egui axis labels + colorbar ticks |
 | M8 | Zoom / pan |
 | M9 | MXFR stdin reader + CLI |
 | M10 | PyO3 Python extension (optional) |

@@ -3,6 +3,7 @@ mod colormap;
 mod interp;
 mod norm;
 mod renderer;
+mod ui;
 
 use winit::event_loop::EventLoop;
 

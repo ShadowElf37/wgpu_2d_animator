@@ -14,6 +14,7 @@ use crate::colormap::Colormap;
 use crate::interp::InterpMode;
 use crate::norm::{self, NormMode};
 use crate::renderer::GpuState;
+use crate::ui;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test animation: Gaussian blob orbiting the centre, 60 frames @ 30 fps.
@@ -54,6 +55,9 @@ pub struct App {
     global_range:    (f32, f32),
     fixed_range:     (f32, f32),
     interp_mode:     InterpMode,
+    colormap:        Colormap,
+    egui_ctx:        egui::Context,
+    egui_winit:      Option<egui_winit::State>,
 }
 
 impl Default for App {
@@ -69,6 +73,9 @@ impl Default for App {
             global_range:    (0.0, 1.0),
             fixed_range:     (0.0, 1.0),
             interp_mode:     InterpMode::default(),
+            colormap:        Colormap::default(),
+            egui_ctx:        egui::Context::default(),
+            egui_winit:      None,
         }
     }
 }
@@ -88,25 +95,36 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
-            .with_title("wgpu_animator — M5")
+            .with_title("wgpu_animator — M7")
             .with_inner_size(LogicalSize::new(900u32, 800u32));
 
         let window = Arc::new(
             event_loop.create_window(attrs).expect("failed to create window"),
         );
 
+        // egui-winit state — needs the window for scale factor and display handle.
+        let egui_winit = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            window.as_ref(),
+            Some(window.scale_factor() as f32),
+            None, // theme
+            None, // max_texture_side (let wgpu backend decide)
+        );
+
         let mut gpu = GpuState::new(Arc::clone(&window)).expect("failed to init wgpu");
 
-        self.frames      = orbit_frames();
+        self.frames       = orbit_frames();
         self.global_range = norm::global_range(&self.frames);
 
         let (vmin, vmax) = norm::frame_range(
             &self.frames[0], self.norm_mode, self.global_range, self.fixed_range,
         );
-        gpu.init_data(W, H, &self.frames[0], vmin, vmax, Colormap::Heat, self.interp_mode.as_u32());
+        gpu.init_data(W, H, &self.frames[0], vmin, vmax, self.colormap, self.interp_mode.as_u32());
 
         self.window          = Some(window);
         self.gpu             = Some(gpu);
+        self.egui_winit      = Some(egui_winit);
         self.frame_idx       = 0;
         self.next_anim_frame = None;
 
@@ -124,6 +142,11 @@ impl ApplicationHandler for App {
         _window_id:  WindowId,
         event:       WindowEvent,
     ) {
+        // Forward every event to egui first (handles mouse/text input for the UI).
+        if let (Some(ew), Some(w)) = (&mut self.egui_winit, &self.window) {
+            let _ = ew.on_window_event(w, &event);
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
@@ -171,19 +194,47 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // ── Upload + render ───────────────────────────────────────
+                // ── Compute normalization ─────────────────────────────────
+                let (vmin, vmax) = if !self.frames.is_empty() {
+                    norm::frame_range(
+                        &self.frames[self.frame_idx],
+                        self.norm_mode, self.global_range, self.fixed_range,
+                    )
+                } else { (0.0, 1.0) };
+                let interp   = self.interp_mode.as_u32();
+                let colormap = self.colormap;
+
+                // ── Upload frame ──────────────────────────────────────────
                 if let Some(gpu) = &mut self.gpu {
                     if !self.frames.is_empty() {
-                        let frame = &self.frames[self.frame_idx];
-                        let (vmin, vmax) = norm::frame_range(
-                            frame, self.norm_mode, self.global_range, self.fixed_range,
-                        );
-                        gpu.upload_frame(frame, vmin, vmax, self.interp_mode.as_u32());
+                        gpu.upload_frame(&self.frames[self.frame_idx], vmin, vmax, interp);
                     }
-                    match gpu.render() {
+                }
+
+                // ── Build egui UI ─────────────────────────────────────────
+                let window = self.window.as_ref().unwrap();
+                let raw_input = self.egui_winit.as_mut().unwrap().take_egui_input(window);
+                let full_output = self.egui_ctx.run(raw_input, |ctx| {
+                    ui::build(ctx, vmin, vmax, colormap);
+                });
+                self.egui_winit.as_mut().unwrap()
+                    .handle_platform_output(window, full_output.platform_output);
+
+                let paint_jobs = self.egui_ctx.tessellate(
+                    full_output.shapes, full_output.pixels_per_point,
+                );
+                let size = window.inner_size();
+                let screen_desc = egui_wgpu::ScreenDescriptor {
+                    size_in_pixels:   [size.width, size.height],
+                    pixels_per_point: full_output.pixels_per_point,
+                };
+
+                // ── Render ────────────────────────────────────────────────
+                if let Some(gpu) = &mut self.gpu {
+                    match gpu.render(&paint_jobs, &full_output.textures_delta, screen_desc) {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            if let Some(w) = &self.window { gpu.resize(w.inner_size()); }
+                            gpu.resize(window.inner_size());
                         }
                         Err(e) => log::error!("render error: {e}"),
                     }
