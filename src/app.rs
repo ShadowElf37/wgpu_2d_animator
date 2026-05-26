@@ -12,11 +12,25 @@ use winit::{
 use crate::renderer::GpuState;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Test data: 256×256 Gaussian blob, values in [0, 1].
+// Exercises the full colormap range: dark edges (black), bright centre (white).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const W: u32 = 256;
+const H: u32 = 256;
+
+fn gaussian_test_frame() -> Vec<f32> {
+    (0..H).flat_map(|row| {
+        (0..W).map(move |col| {
+            let dx = col as f32 / W as f32 - 0.5;
+            let dy = row as f32 / H as f32 - 0.5;
+            (-30.0 * (dx * dx + dy * dy)).exp()
+        })
+    }).collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // App
-//
-// Implements winit's ApplicationHandler trait.  Fields are Option<_> because
-// the window and GPU state can't be created until winit fires `resumed()` —
-// that's the first point at which a valid window handle exists on all platforms.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -26,17 +40,20 @@ pub struct App {
 }
 
 impl ApplicationHandler for App {
-    /// Called once when the event loop is ready to accept a window.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
-            .with_title("Maxwell Animator — M1")
+            .with_title("wgpu_animator — M2")
             .with_inner_size(LogicalSize::new(900u32, 800u32));
 
         let window = Arc::new(
             event_loop.create_window(attrs).expect("failed to create window"),
         );
 
-        let gpu = GpuState::new(Arc::clone(&window)).expect("failed to init wgpu");
+        let mut gpu = GpuState::new(Arc::clone(&window)).expect("failed to init wgpu");
+
+        // Upload the Gaussian test frame so there is visible data immediately.
+        let frame = gaussian_test_frame();
+        gpu.init_data(W, H, &frame, 0.0, 1.0);
 
         self.window = Some(window);
         self.gpu    = Some(gpu);
@@ -44,49 +61,31 @@ impl ApplicationHandler for App {
 
     fn window_event(
         &mut self,
-        event_loop:  &ActiveEventLoop,
-        _window_id:  WindowId,
-        event:       WindowEvent,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event:      WindowEvent,
     ) {
         match event {
-            // ── Exit conditions ───────────────────────────────────────────
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
+            WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    logical_key: Key::Named(NamedKey::Escape),
-                    ..
-                },
+                event: KeyEvent { logical_key: Key::Named(NamedKey::Escape), .. },
                 ..
-            } => {
-                event_loop.exit();
-            }
+            } => event_loop.exit(),
 
-            // ── Resize: reconfigure the swapchain ─────────────────────────
             WindowEvent::Resized(size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(size);
-                }
+                if let Some(gpu) = &mut self.gpu { gpu.resize(size); }
             }
 
-            // ── Redraw: clear and present ──────────────────────────────────
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = &mut self.gpu {
                     match gpu.render() {
                         Ok(()) => {}
-                        // Surface lost or outdated: the next Resized event will
-                        // reconfigure it; nothing to do here.
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {}
                         Err(e) => log::error!("render error: {e}"),
                     }
                 }
-                // Request another frame immediately (continuous render loop).
-                // M3+ will replace this with a timed WaitUntil for target FPS.
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                if let Some(w) = &self.window { w.request_redraw(); }
             }
 
             _ => {}
