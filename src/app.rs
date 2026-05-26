@@ -42,23 +42,23 @@ fn orbit_frames() -> Vec<Vec<f32>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct App {
-    window:          Option<Arc<Window>>,
-    gpu:             Option<GpuState>,
-    frames:          Vec<Vec<f32>>,
-    frame_idx:       usize,
-    fps:             f64,
-    last_frame_time: Option<Instant>,
+    window:         Option<Arc<Window>>,
+    gpu:            Option<GpuState>,
+    frames:         Vec<Vec<f32>>,
+    frame_idx:      usize,
+    fps:            f64,
+    next_frame_due: Option<Instant>,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
-            window:          None,
-            gpu:             None,
-            frames:          Vec::new(),
-            frame_idx:       0,
-            fps:             FPS,
-            last_frame_time: None,
+            window:         None,
+            gpu:            None,
+            frames:         Vec::new(),
+            frame_idx:      0,
+            fps:            FPS,
+            next_frame_due: None,
         }
     }
 }
@@ -78,29 +78,34 @@ impl ApplicationHandler for App {
         self.frames = orbit_frames();
         gpu.init_data(W, H, &self.frames[0], 0.0, 1.0, Colormap::Heat);
 
-        self.window          = Some(window);
-        self.gpu             = Some(gpu);
-        self.frame_idx       = 0;
-        self.last_frame_time = None;
+        self.window         = Some(window);
+        self.gpu            = Some(gpu);
+        self.frame_idx      = 0;
+        self.next_frame_due = None;
 
         self.window.as_ref().unwrap().request_redraw();
     }
 
-    // Called when the event queue drains.  Sleeps until the next frame is due,
-    // then wakes the OS to fire RedrawRequested.  This replaces the M2
-    // spin-loop (continuous request_redraw) with a proper WaitUntil schedule.
+    // Called when the event queue drains.  Uses absolute scheduling: the due
+    // time advances by exactly frame_duration each frame rather than from
+    // Instant::now(), preventing drift that would cause the event loop to spin.
+    // WaitUntil is always set so the process sleeps even when a redraw fires.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(window) = &self.window else { return };
         let frame_duration = Duration::from_secs_f64(1.0 / self.fps);
-        let next = self.last_frame_time
-            .map(|t| t + frame_duration)
-            .unwrap_or_else(Instant::now);
+        let now = Instant::now();
+        let due = self.next_frame_due.get_or_insert(now);
 
-        if Instant::now() >= next {
+        if now >= *due {
             window.request_redraw();
-        } else {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+            *due += frame_duration;
+            // If we've fallen more than one frame behind (e.g. after a long
+            // sleep or pause), snap forward rather than bursting to catch up.
+            if *due < now {
+                *due = now + frame_duration;
+            }
         }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(*due));
     }
 
     fn window_event(
@@ -128,13 +133,17 @@ impl ApplicationHandler for App {
                     }
                     match gpu.render() {
                         Ok(()) => {}
-                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {}
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            // Reconfigure the surface to match the current window size.
+                            if let Some(w) = &self.window {
+                                gpu.resize(w.inner_size());
+                            }
+                        }
                         Err(e) => log::error!("render error: {e}"),
                     }
                 }
                 if !self.frames.is_empty() {
                     self.frame_idx = (self.frame_idx + 1) % self.frames.len();
-                    self.last_frame_time = Some(Instant::now());
                 }
                 // No request_redraw() here — about_to_wait handles scheduling.
             }
