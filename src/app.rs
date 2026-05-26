@@ -5,7 +5,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{KeyEvent, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow},
+    event_loop::ActiveEventLoop,
     keyboard::{Key, NamedKey},
     window::{Window, WindowAttributes, WindowId},
 };
@@ -42,23 +42,25 @@ fn orbit_frames() -> Vec<Vec<f32>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct App {
-    window:         Option<Arc<Window>>,
-    gpu:            Option<GpuState>,
-    frames:         Vec<Vec<f32>>,
-    frame_idx:      usize,
-    fps:            f64,
-    next_frame_due: Option<Instant>,
+    window:          Option<Arc<Window>>,
+    gpu:             Option<GpuState>,
+    frames:          Vec<Vec<f32>>,
+    frame_idx:       usize,
+    fps:             f64,
+    // Next absolute time at which to advance to the next animation frame.
+    // Nil until the first RedrawRequested fires.
+    next_anim_frame: Option<Instant>,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
-            window:         None,
-            gpu:            None,
-            frames:         Vec::new(),
-            frame_idx:      0,
-            fps:            FPS,
-            next_frame_due: None,
+            window:          None,
+            gpu:             None,
+            frames:          Vec::new(),
+            frame_idx:       0,
+            fps:             FPS,
+            next_anim_frame: None,
         }
     }
 }
@@ -78,41 +80,26 @@ impl ApplicationHandler for App {
         self.frames = orbit_frames();
         gpu.init_data(W, H, &self.frames[0], 0.0, 1.0, Colormap::Heat);
 
-        self.window         = Some(window);
-        self.gpu            = Some(gpu);
-        self.frame_idx      = 0;
-        self.next_frame_due = None;
+        self.window          = Some(window);
+        self.gpu             = Some(gpu);
+        self.frame_idx       = 0;
+        self.next_anim_frame = None;
 
         self.window.as_ref().unwrap().request_redraw();
     }
 
-    // Called when the event queue drains.  Uses absolute scheduling: the due
-    // time advances by exactly frame_duration each frame rather than from
-    // Instant::now(), preventing drift that would cause the event loop to spin.
-    // WaitUntil is always set so the process sleeps even when a redraw fires.
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(window) = &self.window else { return };
-        let frame_duration = Duration::from_secs_f64(1.0 / self.fps);
-        let now = Instant::now();
-        let due = self.next_frame_due.get_or_insert(now);
-
-        if now >= *due {
-            window.request_redraw();
-            *due += frame_duration;
-            // If we've fallen more than one frame behind (e.g. after a long
-            // sleep or pause), snap forward rather than bursting to catch up.
-            if *due < now {
-                *due = now + frame_duration;
-            }
-        }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(*due));
+    // Request a redraw every time the queue drains.  PresentMode::Fifo in
+    // render() blocks at vsync, so this loop naturally runs at the display
+    // refresh rate — no software WaitUntil timer needed or wanted.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(w) = &self.window { w.request_redraw(); }
     }
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event:      WindowEvent,
+        event_loop:  &ActiveEventLoop,
+        _window_id:  WindowId,
+        event:       WindowEvent,
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -127,6 +114,23 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                // ── Animation frame advance ───────────────────────────────
+                // Rendered at vsync rate (e.g. 60 Hz); animation advances at
+                // self.fps (e.g. 30 fps).  The same animation frame is uploaded
+                // for multiple display frames — no timer, no WaitUntil jitter.
+                if !self.frames.is_empty() {
+                    let now = Instant::now();
+                    let frame_duration = Duration::from_secs_f64(1.0 / self.fps);
+                    let due = self.next_anim_frame.get_or_insert(now + frame_duration);
+                    if now >= *due {
+                        self.frame_idx = (self.frame_idx + 1) % self.frames.len();
+                        *due += frame_duration;
+                        // If fallen more than one frame behind, snap forward.
+                        if *due < now { *due = now + frame_duration; }
+                    }
+                }
+
+                // ── Upload + render ───────────────────────────────────────
                 if let Some(gpu) = &mut self.gpu {
                     if !self.frames.is_empty() {
                         gpu.upload_frame(&self.frames[self.frame_idx], 0.0, 1.0);
@@ -134,18 +138,11 @@ impl ApplicationHandler for App {
                     match gpu.render() {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            // Reconfigure the surface to match the current window size.
-                            if let Some(w) = &self.window {
-                                gpu.resize(w.inner_size());
-                            }
+                            if let Some(w) = &self.window { gpu.resize(w.inner_size()); }
                         }
                         Err(e) => log::error!("render error: {e}"),
                     }
                 }
-                if !self.frames.is_empty() {
-                    self.frame_idx = (self.frame_idx + 1) % self.frames.len();
-                }
-                // No request_redraw() here — about_to_wait handles scheduling.
             }
 
             _ => {}
