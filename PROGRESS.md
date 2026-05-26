@@ -52,15 +52,25 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 
 ---
 
+## M4 — Animation playback at target FPS ✅
+
+**Files:** `src/app.rs`
+
+- `App` now stores a `Vec<Vec<f32>>` frame sequence and advances `frame_idx` after each `RedrawRequested`.
+- Replaced the M2/M3 spin-loop (`request_redraw()` in `about_to_wait` unconditionally) with a **`WaitUntil` schedule**: `about_to_wait` computes `last_frame_time + frame_duration`; if that instant has passed it requests an immediate redraw, otherwise it sets `ControlFlow::WaitUntil(next)` so the OS sleeps the process until the frame is due.  CPU load is now negligible between frames.
+- Test animation: 60-frame Gaussian blob orbiting the window centre at radius 0.28, looping at 30 fps.  Exercises the upload-per-frame path and makes timing visually obvious.
+- `last_frame_time: Option<Instant>` initialised to `None`; first frame fires immediately.
+- `GpuState::upload_frame` called before `render` each `RedrawRequested` so the texture is always current before the draw.
+
 ## Upcoming
 
 | # | Goal |
 |---|---|
-| M3 | Colormap LUT texture + all built-in maps |
-| M4 | Animation playback at target FPS |
+| M5 | Normalization modes (global, per-frame, percentile) |
 | M5 | Normalization modes (global, per-frame, percentile) |
 | M6 | Interpolation switch (nearest → linear → bicubic) |
 | M7 | egui axis labels + colorbar ticks |
 | M8 | Zoom / pan |
 | M9 | MXFR stdin reader + CLI |
 | M10 | PyO3 Python extension (optional) |
+

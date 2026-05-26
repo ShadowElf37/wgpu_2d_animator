@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{KeyEvent, WindowEvent},
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::{Key, NamedKey},
     window::{Window, WindowAttributes, WindowId},
 };
@@ -13,20 +14,26 @@ use crate::colormap::Colormap;
 use crate::renderer::GpuState;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test data: 256×256 Gaussian blob, values in [0, 1].
-// Exercises the full colormap range: dark edges (black), bright centre (white).
+// Test animation: Gaussian blob orbiting the centre, 60 frames @ 30 fps.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const W: u32 = 256;
 const H: u32 = 256;
+const N_FRAMES: u32 = 60;
+const FPS: f64 = 30.0;
 
-fn gaussian_test_frame() -> Vec<f32> {
-    (0..H).flat_map(|row| {
-        (0..W).map(move |col| {
-            let dx = col as f32 / W as f32 - 0.5;
-            let dy = row as f32 / H as f32 - 0.5;
-            (-30.0 * (dx * dx + dy * dy)).exp()
-        })
+fn orbit_frames() -> Vec<Vec<f32>> {
+    (0..N_FRAMES).map(|i| {
+        let angle = 2.0 * std::f32::consts::PI * i as f32 / N_FRAMES as f32;
+        let cx = 0.5 + 0.28 * angle.cos();
+        let cy = 0.5 + 0.28 * angle.sin();
+        (0..H).flat_map(|row| {
+            (0..W).map(move |col| {
+                let dx = col as f32 / W as f32 - cx;
+                let dy = row as f32 / H as f32 - cy;
+                (-50.0 * (dx * dx + dy * dy)).exp()
+            })
+        }).collect()
     }).collect()
 }
 
@@ -34,16 +41,32 @@ fn gaussian_test_frame() -> Vec<f32> {
 // App
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Default)]
 pub struct App {
-    window: Option<Arc<Window>>,
-    gpu:    Option<GpuState>,
+    window:          Option<Arc<Window>>,
+    gpu:             Option<GpuState>,
+    frames:          Vec<Vec<f32>>,
+    frame_idx:       usize,
+    fps:             f64,
+    last_frame_time: Option<Instant>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            window:          None,
+            gpu:             None,
+            frames:          Vec::new(),
+            frame_idx:       0,
+            fps:             FPS,
+            last_frame_time: None,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = WindowAttributes::default()
-            .with_title("wgpu_animator — M2")
+            .with_title("wgpu_animator — M4")
             .with_inner_size(LogicalSize::new(900u32, 800u32));
 
         let window = Arc::new(
@@ -52,23 +75,31 @@ impl ApplicationHandler for App {
 
         let mut gpu = GpuState::new(Arc::clone(&window)).expect("failed to init wgpu");
 
-        // Upload the Gaussian test frame so there is visible data immediately.
-        let frame = gaussian_test_frame();
-        gpu.init_data(W, H, &frame, 0.0, 1.0, Colormap::Heat);
+        self.frames = orbit_frames();
+        gpu.init_data(W, H, &self.frames[0], 0.0, 1.0, Colormap::Heat);
 
-        self.window = Some(window);
-        self.gpu    = Some(gpu);
+        self.window          = Some(window);
+        self.gpu             = Some(gpu);
+        self.frame_idx       = 0;
+        self.last_frame_time = None;
 
-        // Kick off the render loop.  On macOS, RedrawRequested does not fire
-        // automatically when the window first appears — we must request it.
         self.window.as_ref().unwrap().request_redraw();
     }
 
-    // Called when the event queue drains.  Requesting redraw here ensures the
-    // render loop keeps running even if RedrawRequested is rate-limited by the OS.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(w) = &self.window {
-            w.request_redraw();
+    // Called when the event queue drains.  Sleeps until the next frame is due,
+    // then wakes the OS to fire RedrawRequested.  This replaces the M2
+    // spin-loop (continuous request_redraw) with a proper WaitUntil schedule.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = &self.window else { return };
+        let frame_duration = Duration::from_secs_f64(1.0 / self.fps);
+        let next = self.last_frame_time
+            .map(|t| t + frame_duration)
+            .unwrap_or_else(Instant::now);
+
+        if Instant::now() >= next {
+            window.request_redraw();
+        } else {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(next));
         }
     }
 
@@ -92,13 +123,20 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = &mut self.gpu {
+                    if !self.frames.is_empty() {
+                        gpu.upload_frame(&self.frames[self.frame_idx], 0.0, 1.0);
+                    }
                     match gpu.render() {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {}
                         Err(e) => log::error!("render error: {e}"),
                     }
                 }
-                if let Some(w) = &self.window { w.request_redraw(); }
+                if !self.frames.is_empty() {
+                    self.frame_idx = (self.frame_idx + 1) % self.frames.len();
+                    self.last_frame_time = Some(Instant::now());
+                }
+                // No request_redraw() here — about_to_wait handles scheduling.
             }
 
             _ => {}
