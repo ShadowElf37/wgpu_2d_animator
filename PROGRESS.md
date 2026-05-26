@@ -26,6 +26,11 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 - Uniform struct padded to 16 bytes (`vmin`, `vmax`, `_pad: vec2<f32>`) to satisfy wgpu uniform buffer alignment on all backends.
 - Test data: 256×256 Gaussian blob centred at (0.5, 0.5).  Provides a smooth gradient that exercises the full [0, 1] colormap range.
 
+**Bug fixed post-commit:**
+- `RedrawRequested` does not fire automatically on macOS before an explicit call.  Fixed by calling `request_redraw()` at the end of `resumed()` and implementing `about_to_wait()` as the continuous driver.
+- Texture view created with `format: Some(self.config.format)` instead of `Default::default()`.  On macOS/Metal the swapchain texture's internal format can differ from the configured sRGB surface format; the default descriptor picks the internal format, silently mismatching the pipeline's colour target and causing the draw to be discarded.
+- Topology changed from `TriangleStrip` (4 vertices) to `TriangleList` (6 vertices) — less ambiguous, no degenerate-strip edge cases on any backend.
+
 ---
 
 ## Upcoming

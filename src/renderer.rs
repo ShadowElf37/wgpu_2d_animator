@@ -105,7 +105,7 @@ impl DataPipeline {
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -183,7 +183,7 @@ impl DataPipeline {
     pub fn draw<'rp>(&'rp self, pass: &mut wgpu::RenderPass<'rp>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..4, 0..1);   // 4 vertices (TriangleStrip), 1 instance
+        pass.draw(0..6, 0..1);   // 6 vertices (TriangleList, 2 triangles), 1 instance
     }
 }
 
@@ -274,7 +274,14 @@ impl GpuState {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view   = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Explicitly set the view format to match the surface config.
+        // On macOS/Metal the swapchain texture's internal format can differ from
+        // the configured sRGB format; using the default descriptor would pick the
+        // internal format and silently mismatch the pipeline's colour target.
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format),
+            ..Default::default()
+        });
 
         let mut enc = self.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("frame") },

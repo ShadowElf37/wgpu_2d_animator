@@ -3,12 +3,10 @@
 // value through the heat colormap (black → red → white).
 
 // ── Uniforms ─────────────────────────────────────────────────────────────────
-// Padded to 16 bytes so the struct satisfies wgpu uniform buffer alignment
-// on every backend.  vmin/vmax define the data range mapped to [0, 1].
 struct Uniforms {
     vmin: f32,
     vmax: f32,
-    _pad: vec2<f32>,
+    _pad: vec2<f32>,   // pad to 16 bytes for uniform buffer alignment
 };
 
 @group(0) @binding(0) var<uniform> u:        Uniforms;
@@ -16,15 +14,15 @@ struct Uniforms {
 
 // ── Vertex shader ─────────────────────────────────────────────────────────────
 // Generates a full-screen quad from vertex index alone (no vertex buffer).
-// Topology: TriangleStrip, draw(0..4).
+// Topology: TriangleList, draw(0..6).
 //
-//  vi=0  top-left   clip(-1,+1)  UV(0,0)
-//  vi=1  top-right  clip(+1,+1)  UV(1,0)
-//  vi=2  bot-left   clip(-1,-1)  UV(0,1)
-//  vi=3  bot-right  clip(+1,-1)  UV(1,1)
+// Two triangles that tile the clip-space square [-1,1]²:
+//   Triangle 0:  vi 0,1,2  →  bot-left, bot-right, top-left
+//   Triangle 1:  vi 3,4,5  →  bot-right, top-right, top-left
 //
-// The Y flip between clip space (+y up) and UV space (+y down) is handled
-// by pairing clip +1 with UV 0 and clip -1 with UV 1 on the Y axis.
+// UV convention: (0,0) = top-left of data, (1,1) = bottom-right.
+// The Y flip between clip (+y up) and UV (+y down) is handled by mapping
+// clip y=-1 to UV y=1 and clip y=+1 to UV y=0.
 
 struct VertOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -33,17 +31,22 @@ struct VertOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
-    var pos = array<vec2<f32>, 4>(
-        vec2<f32>(-1.0,  1.0),
-        vec2<f32>( 1.0,  1.0),
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 1.0, -1.0),
+    //                      clip xy          UV
+    var pos = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),   // tri 0 bot-left
+        vec2<f32>( 1.0, -1.0),   // tri 0 bot-right
+        vec2<f32>(-1.0,  1.0),   // tri 0 top-left
+        vec2<f32>( 1.0, -1.0),   // tri 1 bot-right
+        vec2<f32>( 1.0,  1.0),   // tri 1 top-right
+        vec2<f32>(-1.0,  1.0),   // tri 1 top-left
     );
-    var uvs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
+    var uvs = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 1.0),     // bot-left  → UV (0,1)
+        vec2<f32>(1.0, 1.0),     // bot-right → UV (1,1)
+        vec2<f32>(0.0, 0.0),     // top-left  → UV (0,0)
+        vec2<f32>(1.0, 1.0),     // bot-right → UV (1,1)
+        vec2<f32>(1.0, 0.0),     // top-right → UV (1,0)
+        vec2<f32>(0.0, 0.0),     // top-left  → UV (0,0)
     );
     var out: VertOut;
     out.clip_pos = vec4<f32>(pos[vi], 0.0, 1.0);
@@ -52,9 +55,9 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 }
 
 // ── Colormap ──────────────────────────────────────────────────────────────────
-// Heat: three piecewise-linear ramps on r, g, b.
-//   t ∈ [0.0, 0.5] : black → red   (r ramps 0→1, g/b stay 0)
-//   t ∈ [0.5, 1.0] : red   → white (g/b ramp 0→1, r stays 1)
+// Heat: black → red → white via three piecewise-linear ramps.
+//   t ∈ [0.0, 0.5] : r ramps 0→1, g and b stay 0   (black → red)
+//   t ∈ [0.5, 1.0] : g and b ramp 0→1, r stays 1   (red → white)
 fn heat(t: f32) -> vec3<f32> {
     return vec3<f32>(
         clamp(t * 2.0,       0.0, 1.0),
@@ -64,9 +67,9 @@ fn heat(t: f32) -> vec3<f32> {
 }
 
 // ── Fragment shader ───────────────────────────────────────────────────────────
-// Uses textureLoad (integer coordinates) instead of textureSample because
-// R32Float is non-filterable on Metal and Vulkan without an optional feature.
-// Nearest-neighbour is correct for M2; interpolation is added at M6.
+// textureLoad (integer coords) instead of textureSample: R32Float is
+// non-filterable on Metal/Vulkan without an optional feature flag.
+// Nearest-neighbour is correct for now; interpolation is added at M6.
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let dims  = vec2<i32>(textureDimensions(data_tex));

@@ -57,6 +57,18 @@ impl ApplicationHandler for App {
 
         self.window = Some(window);
         self.gpu    = Some(gpu);
+
+        // Kick off the render loop.  On macOS, RedrawRequested does not fire
+        // automatically when the window first appears — we must request it.
+        self.window.as_ref().unwrap().request_redraw();
+    }
+
+    // Called when the event queue drains.  Requesting redraw here ensures the
+    // render loop keeps running even if RedrawRequested is rate-limited by the OS.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
     }
 
     fn window_event(
