@@ -11,6 +11,7 @@ use winit::{
 };
 
 use crate::colormap::Colormap;
+use crate::interp::InterpMode;
 use crate::norm::{self, NormMode};
 use crate::renderer::GpuState;
 
@@ -51,8 +52,8 @@ pub struct App {
     next_anim_frame: Option<Instant>,
     norm_mode:       NormMode,
     global_range:    (f32, f32),
-    // Fixed range exposed for future UI use; matches test-data bounds for now.
     fixed_range:     (f32, f32),
+    interp_mode:     InterpMode,
 }
 
 impl Default for App {
@@ -67,6 +68,7 @@ impl Default for App {
             norm_mode:       NormMode::default(),
             global_range:    (0.0, 1.0),
             fixed_range:     (0.0, 1.0),
+            interp_mode:     InterpMode::default(),
         }
     }
 }
@@ -75,8 +77,9 @@ impl App {
     fn update_title(&self) {
         if let Some(w) = &self.window {
             w.set_title(&format!(
-                "wgpu_animator — norm: {}",
-                self.norm_mode.label()
+                "wgpu_animator — norm: {} | interp: {}",
+                self.norm_mode.label(),
+                self.interp_mode.label(),
             ));
         }
     }
@@ -100,7 +103,7 @@ impl ApplicationHandler for App {
         let (vmin, vmax) = norm::frame_range(
             &self.frames[0], self.norm_mode, self.global_range, self.fixed_range,
         );
-        gpu.init_data(W, H, &self.frames[0], vmin, vmax, Colormap::Heat);
+        gpu.init_data(W, H, &self.frames[0], vmin, vmax, Colormap::Heat, self.interp_mode.as_u32());
 
         self.window          = Some(window);
         self.gpu             = Some(gpu);
@@ -129,7 +132,7 @@ impl ApplicationHandler for App {
                 ..
             } => event_loop.exit(),
 
-            // N — cycle normalization mode
+            // N — cycle normalization mode; I — cycle interpolation mode
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
                     logical_key: Key::Character(ref ch),
@@ -137,9 +140,17 @@ impl ApplicationHandler for App {
                     ..
                 },
                 ..
-            } if ch.as_str() == "n" || ch.as_str() == "N" => {
-                self.norm_mode = self.norm_mode.next();
-                log::info!("norm mode: {}", self.norm_mode.label());
+            } if matches!(ch.as_str(), "n" | "N" | "i" | "I") => {
+                match ch.as_str() {
+                    "n" | "N" => {
+                        self.norm_mode = self.norm_mode.next();
+                        log::info!("norm mode: {}", self.norm_mode.label());
+                    }
+                    _ => {
+                        self.interp_mode = self.interp_mode.next();
+                        log::info!("interp mode: {}", self.interp_mode.label());
+                    }
+                }
                 self.update_title();
             }
 
@@ -167,7 +178,7 @@ impl ApplicationHandler for App {
                         let (vmin, vmax) = norm::frame_range(
                             frame, self.norm_mode, self.global_range, self.fixed_range,
                         );
-                        gpu.upload_frame(frame, vmin, vmax);
+                        gpu.upload_frame(frame, vmin, vmax, self.interp_mode.as_u32());
                     }
                     match gpu.render() {
                         Ok(()) => {}

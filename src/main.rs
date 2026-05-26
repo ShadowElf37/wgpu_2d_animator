@@ -1,5 +1,6 @@
 mod app;
 mod colormap;
+mod interp;
 mod norm;
 mod renderer;
 

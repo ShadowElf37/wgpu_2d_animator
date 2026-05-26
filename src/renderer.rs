@@ -11,9 +11,10 @@ use crate::colormap::Colormap;
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    vmin: f32,
-    vmax: f32,
-    _pad: [f32; 2],
+    vmin:        f32,
+    vmax:        f32,
+    interp_mode: u32,
+    _pad:        f32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -248,9 +249,9 @@ impl DataPipeline {
         );
     }
 
-    /// Upload a new frame and update the normalization range.
+    /// Upload a new frame, normalization range, and interpolation mode.
     /// `data` must be `width * height` f32 values, row-major.
-    pub fn upload(&self, queue: &wgpu::Queue, data: &[f32], vmin: f32, vmax: f32) {
+    pub fn upload(&self, queue: &wgpu::Queue, data: &[f32], vmin: f32, vmax: f32, interp_mode: u32) {
         queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture:   &self.texture,
@@ -269,7 +270,7 @@ impl DataPipeline {
         queue.write_buffer(
             &self.uniform_buf,
             0,
-            bytemuck::bytes_of(&Uniforms { vmin, vmax, _pad: [0.0; 2] }),
+            bytemuck::bytes_of(&Uniforms { vmin, vmax, interp_mode, _pad: 0.0 }),
         );
     }
 
@@ -348,24 +349,25 @@ impl GpuState {
     /// Create the data pipeline for a fixed grid size and upload the first frame.
     pub fn init_data(
         &mut self,
-        width:    u32,
-        height:   u32,
-        data:     &[f32],
-        vmin:     f32,
-        vmax:     f32,
-        colormap: Colormap,
+        width:       u32,
+        height:      u32,
+        data:        &[f32],
+        vmin:        f32,
+        vmax:        f32,
+        colormap:    Colormap,
+        interp_mode: u32,
     ) {
         let dp = DataPipeline::new(
             &self.device, &self.queue, self.config.format, width, height, colormap,
         );
-        dp.upload(&self.queue, data, vmin, vmax);
+        dp.upload(&self.queue, data, vmin, vmax, interp_mode);
         self.data_pipeline = Some(dp);
     }
 
     /// Upload a new frame to an already-initialised pipeline.
-    pub fn upload_frame(&self, data: &[f32], vmin: f32, vmax: f32) {
+    pub fn upload_frame(&self, data: &[f32], vmin: f32, vmax: f32, interp_mode: u32) {
         if let Some(dp) = &self.data_pipeline {
-            dp.upload(&self.queue, data, vmin, vmax);
+            dp.upload(&self.queue, data, vmin, vmax, interp_mode);
         }
     }
 

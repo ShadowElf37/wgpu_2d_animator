@@ -77,11 +77,25 @@ Milestone tracker. Each entry records what was implemented and any non-obvious d
 - A degenerate range (`|max−min| < 1e-9`) is expanded to `(min, min+1)` to prevent shader divide-by-zero.
 - Window title updated live to show the active mode (e.g. `wgpu_animator — norm: per-frame`).
 
+---
+
+## M6 — Interpolation switch (nearest / bilinear / bicubic) ✅
+
+**Files:** `src/interp.rs` (new), `src/shaders/data.wgsl`, `src/renderer.rs`, `src/app.rs`, `src/main.rs`
+
+- Three modes switchable with the `I` key:
+  - **Nearest** (default) — `textureLoad` at integer pixel coordinates; identical to previous behaviour.
+  - **Bilinear** — 4-tap manual bilinear using `textureLoad`; smooth but no overshoot.
+  - **Bicubic** — 16-tap Catmull-Rom (α = -0.5) using `textureLoad`; sharper with slight edge overshoot.
+- All three modes use `textureLoad` (integer coords) — R32Float is non-filterable on Metal/Vulkan without an optional GPU feature, so hardware bilinear is not available.  Manual interpolation in the shader gives the same result portably.
+- `interp_mode: u32` added to the `Uniforms` struct (replaces one padding slot; total still 16 bytes).  The shader dispatches on the uniform value; drivers specialise uniform branches, so there is no per-fragment overhead.
+- `InterpMode` enum in `src/interp.rs`; `as_u32()` maps to the shader constants (0/1/2).
+- Window title now shows both active modes: `wgpu_animator — norm: global | interp: nearest`.
+
 ## Upcoming
 
 | # | Goal |
 |---|---|
-| M6 | Interpolation switch (nearest → linear → bicubic) |
 | M7 | egui axis labels + colorbar ticks |
 | M8 | Zoom / pan |
 | M9 | MXFR stdin reader + CLI |

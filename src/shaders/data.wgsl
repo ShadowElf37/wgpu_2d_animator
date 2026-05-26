@@ -4,9 +4,10 @@
 
 // ── Uniforms ──────────────────────────────────────────────────────────────────
 struct Uniforms {
-    vmin: f32,
-    vmax: f32,
-    _pad: vec2<f32>,   // pad to 16 bytes for uniform buffer alignment
+    vmin:        f32,
+    vmax:        f32,
+    interp_mode: u32,   // 0 = nearest, 1 = bilinear, 2 = bicubic (Catmull-Rom)
+    _pad:        f32,
 };
 
 @group(0) @binding(0) var<uniform> u:         Uniforms;
@@ -56,19 +57,69 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
     return out;
 }
 
+// ── Sampling helpers ──────────────────────────────────────────────────────────
+// R32Float is non-filterable on Metal/Vulkan without an optional GPU feature,
+// so all three modes use textureLoad (integer coords) and interpolate manually.
+
+fn tex_load(coord: vec2<i32>, dims: vec2<i32>) -> f32 {
+    return textureLoad(data_tex, clamp(coord, vec2<i32>(0), dims - vec2<i32>(1)), 0).r;
+}
+
+fn sample_nearest(uv: vec2<f32>, dims: vec2<i32>) -> f32 {
+    return tex_load(vec2<i32>(uv * vec2<f32>(dims)), dims);
+}
+
+fn sample_linear(uv: vec2<f32>, dims: vec2<i32>) -> f32 {
+    // Map UV to pixel-centre space, isolate integer and fractional parts.
+    let p   = uv * vec2<f32>(dims) - 0.5;
+    let i   = vec2<i32>(floor(p));
+    let f   = p - floor(p);
+    let c00 = tex_load(i,                   dims);
+    let c10 = tex_load(i + vec2<i32>(1, 0), dims);
+    let c01 = tex_load(i + vec2<i32>(0, 1), dims);
+    let c11 = tex_load(i + vec2<i32>(1, 1), dims);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+// Catmull-Rom cubic kernel (α = -0.5).
+fn cubic_w(t: f32) -> f32 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    if t < 1.0 {
+        return 1.5 * t3 - 2.5 * t2 + 1.0;
+    } else if t < 2.0 {
+        return -0.5 * t3 + 2.5 * t2 - 4.0 * t + 2.0;
+    }
+    return 0.0;
+}
+
+fn sample_bicubic(uv: vec2<f32>, dims: vec2<i32>) -> f32 {
+    let p = uv * vec2<f32>(dims) - 0.5;
+    let i = vec2<i32>(floor(p));
+    let f = p - floor(p);
+    var result = 0.0;
+    for (var jj: i32 = -1; jj <= 2; jj = jj + 1) {
+        let wy = cubic_w(abs(f.y - f32(jj)));
+        for (var ii: i32 = -1; ii <= 2; ii = ii + 1) {
+            let wx = cubic_w(abs(f.x - f32(ii)));
+            result = result + wx * wy * tex_load(i + vec2<i32>(ii, jj), dims);
+        }
+    }
+    return result;
+}
+
 // ── Fragment shader ───────────────────────────────────────────────────────────
-// textureLoad (integer coords) for the data texture: R32Float is non-filterable
-// on Metal/Vulkan without an optional feature.  The colormap LUT is Rgba8Unorm
-// (filterable), so textureSample gives linear interpolation between LUT entries.
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
-    let dims  = vec2<i32>(textureDimensions(data_tex));
-    let coord = clamp(
-        vec2<i32>(in.uv * vec2<f32>(dims)),
-        vec2<i32>(0, 0),
-        dims - vec2<i32>(1, 1),
-    );
-    let raw = textureLoad(data_tex, coord, 0).r;
+    let dims = vec2<i32>(textureDimensions(data_tex));
+    var raw: f32;
+    if u.interp_mode == 1u {
+        raw = sample_linear(in.uv, dims);
+    } else if u.interp_mode == 2u {
+        raw = sample_bicubic(in.uv, dims);
+    } else {
+        raw = sample_nearest(in.uv, dims);
+    }
     let t   = clamp((raw - u.vmin) / (u.vmax - u.vmin), 0.0, 1.0);
     let col = textureSample(cmap_tex, cmap_samp, t);
     return vec4<f32>(col.rgb, 1.0);
