@@ -6,8 +6,11 @@
 struct Uniforms {
     vmin:        f32,
     vmax:        f32,
-    interp_mode: u32,   // 0 = nearest, 1 = bilinear, 2 = bicubic (Catmull-Rom)
+    interp_mode: u32,        // 0 = nearest, 1 = bilinear, 2 = bicubic (Catmull-Rom)
     _pad:        f32,
+    pan:         vec2<f32>,  // view centre offset in data-UV space
+    zoom:        f32,        // scale factor (> 1 = zoomed in)
+    _pad2:       f32,
 };
 
 @group(0) @binding(0) var<uniform> u:         Uniforms;
@@ -111,14 +114,23 @@ fn sample_bicubic(uv: vec2<f32>, dims: vec2<i32>) -> f32 {
 // ── Fragment shader ───────────────────────────────────────────────────────────
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+    // Apply zoom/pan: transform screen UV → data UV.
+    // zoom > 1 magnifies; pan offsets the view centre in data-UV space.
+    let data_uv = (in.uv - vec2<f32>(0.5) - u.pan) / u.zoom + vec2<f32>(0.5);
+
+    // Out-of-bounds pixels show the clear colour (dark blue-grey).
+    if data_uv.x < 0.0 || data_uv.x > 1.0 || data_uv.y < 0.0 || data_uv.y > 1.0 {
+        return vec4<f32>(0.05, 0.05, 0.12, 1.0);
+    }
+
     let dims = vec2<i32>(textureDimensions(data_tex));
     var raw: f32;
     if u.interp_mode == 1u {
-        raw = sample_linear(in.uv, dims);
+        raw = sample_linear(data_uv, dims);
     } else if u.interp_mode == 2u {
-        raw = sample_bicubic(in.uv, dims);
+        raw = sample_bicubic(data_uv, dims);
     } else {
-        raw = sample_nearest(in.uv, dims);
+        raw = sample_nearest(data_uv, dims);
     }
     let t   = clamp((raw - u.vmin) / (u.vmax - u.vmin), 0.0, 1.0);
     let col = textureSample(cmap_tex, cmap_samp, t);

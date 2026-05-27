@@ -1,9 +1,23 @@
 use egui;
 use crate::colormap::Colormap;
 
-/// Build the egui overlay: colorbar on the right, axis tick labels around the data.
-pub fn build(ctx: &egui::Context, vmin: f32, vmax: f32, colormap: Colormap) {
+/// Build the egui overlay.
+///
+/// `zoom` and `pan` are updated in-place from mouse scroll / drag events that
+/// occur inside the central panel.  The caller must copy them out before the
+/// `egui::Context::run` closure and write them back after, to avoid a borrow
+/// conflict with the context.
+pub fn build(
+    ctx:     &egui::Context,
+    vmin:    f32,
+    vmax:    f32,
+    colormap: Colormap,
+    zoom:    &mut f32,
+    pan:     &mut [f32; 2],
+) {
     ctx.set_visuals(egui::Visuals::dark());
+
+    let screen_rect = ctx.screen_rect();
 
     // ── Colorbar (right panel) ────────────────────────────────────────────────
     egui::SidePanel::right("colorbar")
@@ -18,11 +32,43 @@ pub fn build(ctx: &egui::Context, vmin: f32, vmax: f32, colormap: Colormap) {
             draw_colorbar(ui, vmin, vmax, colormap);
         });
 
-    // ── Axis tick labels (central panel, no background) ───────────────────────
+    // ── Central panel — handles zoom / pan input ──────────────────────────────
     egui::CentralPanel::default()
         .frame(egui::Frame::none())
         .show(ctx, |ui| {
-            draw_axis_ticks(ui.painter(), ui.max_rect());
+            let panel_rect = ui.max_rect();
+            let response   = ui.allocate_rect(panel_rect, egui::Sense::drag());
+
+            // Scroll → zoom toward cursor.
+            let scroll = if response.hovered() {
+                ctx.input(|i| i.smooth_scroll_delta.y)
+            } else {
+                0.0
+            };
+            if scroll != 0.0 {
+                let factor   = (scroll * 0.003_f32).exp();
+                let new_zoom = (*zoom * factor).clamp(0.05, 200.0);
+                if let Some(mp) = response.hover_pos() {
+                    // Mouse in screen UV [0,1]×[0,1] (shader's coordinate space).
+                    let mx = mp.x / screen_rect.width();
+                    let my = mp.y / screen_rect.height();
+                    // Keep the data point under the cursor fixed.
+                    let dx = (mx - 0.5 - pan[0]) / *zoom + 0.5;
+                    let dy = (my - 0.5 - pan[1]) / *zoom + 0.5;
+                    pan[0] = mx - 0.5 - (dx - 0.5) * new_zoom;
+                    pan[1] = my - 0.5 - (dy - 0.5) * new_zoom;
+                }
+                *zoom = new_zoom;
+            }
+
+            // Drag → pan.
+            if response.dragged() {
+                let d  = response.drag_delta();
+                pan[0] += d.x / screen_rect.width();
+                pan[1] += d.y / screen_rect.height();
+            }
+
+            draw_axis_ticks(ui.painter(), panel_rect, screen_rect, *zoom, pan);
         });
 }
 
@@ -35,7 +81,7 @@ fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
     let painter = ui.painter();
     let avail   = ui.max_rect();
 
-    let bar_w  = 16.0_f32;
+    let bar_w    = 16.0_f32;
     let bar_rect = egui::Rect::from_min_max(
         egui::pos2(avail.left(),          avail.top()),
         egui::pos2(avail.left() + bar_w, avail.bottom()),
@@ -86,42 +132,88 @@ fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Axis ticks
 // ─────────────────────────────────────────────────────────────────────────────
-// Painted transparently over the data in the central panel.
-// The data coordinate system is [0,1]×[0,1]; Y=0 is the top row.
+//
+// Labels show actual data coordinates (accounting for zoom / pan).
+// X increases left → right; Y increases bottom → top (physical convention).
+//
+// The shader maps screen UV (full-window [0,1]²) to data UV via:
+//   data_uv = (screen_uv - 0.5 - pan) / zoom + 0.5
+//
+// For Y we show the physical coord 1 - data_uv_y so that 0 is at the bottom.
 
-fn draw_axis_ticks(painter: &egui::Painter, rect: egui::Rect) {
+fn draw_axis_ticks(
+    painter:     &egui::Painter,
+    rect:        egui::Rect,
+    screen_rect: egui::Rect,
+    zoom:        f32,
+    pan:         &[f32; 2],
+) {
     let col  = egui::Color32::from_rgba_unmultiplied(220, 220, 220, 180);
     let font = egui::FontId::monospace(10.0);
-    let n    = 5;
+    let n    = 5usize;
+
+    // Decimal places: 2 at zoom ≤ 1, +1 per decade of zoom.
+    let prec = if zoom > 1.0 {
+        (zoom.log10().ceil() as usize).saturating_add(2).min(6)
+    } else {
+        2
+    };
+
+    let sw = screen_rect.width();
+    let sh = screen_rect.height();
 
     for i in 0..=n {
-        let t     = i as f32 / n as f32;
-        let label = format!("{:.2}", t);
+        let t = i as f32 / n as f32;
 
-        // X-axis ticks along the bottom edge (value increases left → right).
-        let x = rect.left() + t * rect.width();
+        // ── X axis (bottom edge) ──────────────────────────────────────────
+        let x     = rect.left() + t * rect.width();
+        let suv_x = x / sw;
+        let data_x = (suv_x - 0.5 - pan[0]) / zoom + 0.5;
+        let label_x = format!("{:.prec$}", data_x, prec = prec);
+
+        let align_x = if i == 0 {
+            egui::Align2::LEFT_BOTTOM
+        } else if i == n {
+            egui::Align2::RIGHT_BOTTOM
+        } else {
+            egui::Align2::CENTER_BOTTOM
+        };
+
         painter.line_segment(
             [egui::pos2(x, rect.bottom()), egui::pos2(x, rect.bottom() - 5.0)],
             egui::Stroke::new(1.0, col),
         );
         painter.text(
             egui::pos2(x, rect.bottom() - 7.0),
-            egui::Align2::CENTER_BOTTOM,
-            &label,
+            align_x,
+            &label_x,
             font.clone(),
             col,
         );
 
-        // Y-axis ticks along the left edge (value increases bottom → top, so flip).
-        let y = rect.bottom() - t * rect.height();
+        // ── Y axis (left edge, increasing bottom → top) ───────────────────
+        let y     = rect.bottom() - t * rect.height();
+        let suv_y = y / sh;
+        let data_uv_y  = (suv_y - 0.5 - pan[1]) / zoom + 0.5;
+        let physical_y = 1.0 - data_uv_y;
+        let label_y = format!("{:.prec$}", physical_y, prec = prec);
+
+        let align_y = if i == 0 {
+            egui::Align2::LEFT_TOP
+        } else if i == n {
+            egui::Align2::LEFT_BOTTOM
+        } else {
+            egui::Align2::LEFT_CENTER
+        };
+
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.left() + 5.0, y)],
             egui::Stroke::new(1.0, col),
         );
         painter.text(
             egui::pos2(rect.left() + 7.0, y),
-            egui::Align2::LEFT_CENTER,
-            &label,
+            align_y,
+            &label_y,
             font.clone(),
             col,
         );

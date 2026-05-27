@@ -10,6 +10,26 @@ pub enum Colormap {
 }
 
 impl Colormap {
+    pub fn label(self) -> &'static str {
+        match self {
+            Colormap::Heat      => "heat",
+            Colormap::Inferno   => "inferno",
+            Colormap::Viridis   => "viridis",
+            Colormap::RdBu      => "rdbu",
+            Colormap::Grayscale => "grayscale",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Colormap::Heat      => Colormap::Inferno,
+            Colormap::Inferno   => Colormap::Viridis,
+            Colormap::Viridis   => Colormap::RdBu,
+            Colormap::RdBu      => Colormap::Grayscale,
+            Colormap::Grayscale => Colormap::Heat,
+        }
+    }
+
     /// Returns 1024 bytes (256 × RGBA8) ready to upload as a 1D texture.
     pub fn lut_rgba8(self) -> Vec<u8> {
         let stops: &[(f32, [f32; 3])] = match self {

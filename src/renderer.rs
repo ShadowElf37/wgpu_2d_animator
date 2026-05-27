@@ -15,6 +15,9 @@ struct Uniforms {
     vmax:        f32,
     interp_mode: u32,
     _pad:        f32,
+    pan:         [f32; 2],
+    zoom:        f32,
+    _pad2:       f32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,9 +252,18 @@ impl DataPipeline {
         );
     }
 
-    /// Upload a new frame, normalization range, and interpolation mode.
+    /// Upload a new frame, normalization range, interpolation mode, and zoom/pan.
     /// `data` must be `width * height` f32 values, row-major.
-    pub fn upload(&self, queue: &wgpu::Queue, data: &[f32], vmin: f32, vmax: f32, interp_mode: u32) {
+    pub fn upload(
+        &self,
+        queue:       &wgpu::Queue,
+        data:        &[f32],
+        vmin:        f32,
+        vmax:        f32,
+        interp_mode: u32,
+        pan:         [f32; 2],
+        zoom:        f32,
+    ) {
         queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture:   &self.texture,
@@ -270,7 +282,7 @@ impl DataPipeline {
         queue.write_buffer(
             &self.uniform_buf,
             0,
-            bytemuck::bytes_of(&Uniforms { vmin, vmax, interp_mode, _pad: 0.0 }),
+            bytemuck::bytes_of(&Uniforms { vmin, vmax, interp_mode, _pad: 0.0, pan, zoom, _pad2: 0.0 }),
         );
     }
 
@@ -363,14 +375,14 @@ impl GpuState {
         let dp = DataPipeline::new(
             &self.device, &self.queue, self.config.format, width, height, colormap,
         );
-        dp.upload(&self.queue, data, vmin, vmax, interp_mode);
+        dp.upload(&self.queue, data, vmin, vmax, interp_mode, [0.0, 0.0], 1.0);
         self.data_pipeline = Some(dp);
     }
 
     /// Upload a new frame to an already-initialised pipeline.
-    pub fn upload_frame(&self, data: &[f32], vmin: f32, vmax: f32, interp_mode: u32) {
+    pub fn upload_frame(&self, data: &[f32], vmin: f32, vmax: f32, interp_mode: u32, pan: [f32; 2], zoom: f32) {
         if let Some(dp) = &self.data_pipeline {
-            dp.upload(&self.queue, data, vmin, vmax, interp_mode);
+            dp.upload(&self.queue, data, vmin, vmax, interp_mode, pan, zoom);
         }
     }
 
