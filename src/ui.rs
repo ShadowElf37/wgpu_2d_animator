@@ -19,17 +19,17 @@ pub fn build(
 
     let screen_rect = ctx.screen_rect();
 
-    // ── Colorbar (right panel) ────────────────────────────────────────────────
-    egui::SidePanel::right("colorbar")
-        .resizable(false)
-        .exact_width(84.0)
-        .frame(
-            egui::Frame::none()
-                .fill(egui::Color32::from_rgb(13, 13, 31))
-                .inner_margin(egui::Margin::symmetric(6.0, 8.0)),
-        )
+    // ── Colorbar (floating overlay, right side) ───────────────────────────────
+    egui::Area::new(egui::Id::new("colorbar"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
+        .interactable(false)
         .show(ctx, |ui| {
-            draw_colorbar(ui, vmin, vmax, colormap);
+            egui::Frame::none()
+                .fill(egui::Color32::TRANSPARENT)
+                .inner_margin(egui::Margin::symmetric(6.0, 8.0))
+                .show(ui, |ui| {
+                    draw_colorbar(ui, vmin, vmax, colormap);
+                });
         });
 
     // ── Central panel — handles zoom / pan input ──────────────────────────────
