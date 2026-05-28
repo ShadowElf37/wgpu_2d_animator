@@ -19,20 +19,7 @@ pub fn build(
 
     let screen_rect = ctx.screen_rect();
 
-    // ── Colorbar (floating overlay, right side) ───────────────────────────────
-    egui::Area::new(egui::Id::new("colorbar"))
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::none()
-                .fill(egui::Color32::TRANSPARENT)
-                .inner_margin(egui::Margin::symmetric(6.0, 8.0))
-                .show(ui, |ui| {
-                    draw_colorbar(ui, vmin, vmax, colormap);
-                });
-        });
-
-    // ── Central panel — handles zoom / pan input ──────────────────────────────
+    // ── Central panel — full-window, no background ────────────────────────────
     egui::CentralPanel::default()
         .frame(egui::Frame::none())
         .show(ctx, |ui| {
@@ -49,10 +36,8 @@ pub fn build(
                 let factor   = (scroll * 0.003_f32).exp();
                 let new_zoom = (*zoom * factor).clamp(0.05, 200.0);
                 if let Some(mp) = response.hover_pos() {
-                    // Mouse in screen UV [0,1]×[0,1] (shader's coordinate space).
                     let mx = mp.x / screen_rect.width();
                     let my = mp.y / screen_rect.height();
-                    // Keep the data point under the cursor fixed.
                     let dx = (mx - 0.5 - pan[0]) / *zoom + 0.5;
                     let dy = (my - 0.5 - pan[1]) / *zoom + 0.5;
                     pan[0] = mx - 0.5 - (dx - 0.5) * new_zoom;
@@ -68,26 +53,35 @@ pub fn build(
                 pan[1] += d.y / screen_rect.height();
             }
 
-            draw_axis_ticks(ui.painter(), panel_rect, screen_rect, *zoom, pan);
+            let painter = ui.painter();
+            draw_axis_ticks(painter, panel_rect, screen_rect, *zoom, pan);
+            draw_colorbar(painter, panel_rect, vmin, vmax, colormap);
         });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Colorbar
+// Colorbar  (painted directly — no container, no background)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
-    let lut     = colormap.lut_rgba8();
-    let painter = ui.painter();
-    let avail   = ui.max_rect();
+fn draw_colorbar(
+    painter:  &egui::Painter,
+    panel:    egui::Rect,
+    vmin:     f32,
+    vmax:     f32,
+    colormap: Colormap,
+) {
+    let lut = colormap.lut_rgba8();
 
     let bar_w    = 16.0_f32;
+    let margin_r =  8.0_f32;
+    let margin_v = 16.0_f32;
+
     let bar_rect = egui::Rect::from_min_max(
-        egui::pos2(avail.left(),          avail.top()),
-        egui::pos2(avail.left() + bar_w, avail.bottom()),
+        egui::pos2(panel.right() - margin_r - bar_w, panel.top()    + margin_v),
+        egui::pos2(panel.right() - margin_r,          panel.bottom() - margin_v),
     );
-    let tick_x0 = bar_rect.right();
-    let label_x = tick_x0 + 6.0;
+    let tick_x0 = bar_rect.left() - 4.0;
+    let label_x = tick_x0 - 2.0;
 
     // Gradient — 64 strips (bottom = vmin, top = vmax).
     let n = 64usize;
@@ -100,13 +94,15 @@ fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
         let col = egui::Color32::from_rgb(lut[idx], lut[idx + 1], lut[idx + 2]);
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(bar_rect.left(), y1), egui::pos2(bar_rect.right(), y0)),
-            0.0, col,
+            0.0,
+            col,
         );
     }
 
     // Border.
     painter.rect_stroke(
-        bar_rect, 0.0,
+        bar_rect,
+        0.0,
         egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
     );
 
@@ -121,7 +117,7 @@ fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
         );
         painter.text(
             egui::pos2(label_x, y),
-            egui::Align2::LEFT_CENTER,
+            egui::Align2::RIGHT_CENTER,
             format!("{:.3}", value),
             egui::FontId::monospace(10.0),
             egui::Color32::from_gray(220),
@@ -132,14 +128,6 @@ fn draw_colorbar(ui: &mut egui::Ui, vmin: f32, vmax: f32, colormap: Colormap) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Axis ticks
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// Labels show actual data coordinates (accounting for zoom / pan).
-// X increases left → right; Y increases bottom → top (physical convention).
-//
-// The shader maps screen UV (full-window [0,1]²) to data UV via:
-//   data_uv = (screen_uv - 0.5 - pan) / zoom + 0.5
-//
-// For Y we show the physical coord 1 - data_uv_y so that 0 is at the bottom.
 
 fn draw_axis_ticks(
     painter:     &egui::Painter,
@@ -152,7 +140,6 @@ fn draw_axis_ticks(
     let font = egui::FontId::monospace(10.0);
     let n    = 5usize;
 
-    // Decimal places: 2 at zoom ≤ 1, +1 per decade of zoom.
     let prec = if zoom > 1.0 {
         (zoom.log10().ceil() as usize).saturating_add(2).min(6)
     } else {
@@ -166,8 +153,8 @@ fn draw_axis_ticks(
         let t = i as f32 / n as f32;
 
         // ── X axis (bottom edge) ──────────────────────────────────────────
-        let x     = rect.left() + t * rect.width();
-        let suv_x = x / sw;
+        let x      = rect.left() + t * rect.width();
+        let suv_x  = x / sw;
         let data_x = (suv_x - 0.5 - pan[0]) / zoom + 0.5;
         let label_x = format!("{:.prec$}", data_x, prec = prec);
 
@@ -192,11 +179,11 @@ fn draw_axis_ticks(
         );
 
         // ── Y axis (left edge, increasing bottom → top) ───────────────────
-        let y     = rect.bottom() - t * rect.height();
-        let suv_y = y / sh;
+        let y          = rect.bottom() - t * rect.height();
+        let suv_y      = y / sh;
         let data_uv_y  = (suv_y - 0.5 - pan[1]) / zoom + 0.5;
         let physical_y = 1.0 - data_uv_y;
-        let label_y = format!("{:.prec$}", physical_y, prec = prec);
+        let label_y    = format!("{:.prec$}", physical_y, prec = prec);
 
         let align_y = if i == 0 {
             egui::Align2::LEFT_TOP
