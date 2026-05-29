@@ -36,6 +36,10 @@ struct Cli {
     /// Interpolation: nearest, linear, bicubic
     #[arg(long = "interp", default_value = "nearest")]
     interp: String,
+
+    /// Title text shown in the top-left corner of the animation window
+    #[arg(long)]
+    title: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -80,6 +84,7 @@ fn main() -> anyhow::Result<()> {
         colormap,
         norm_mode,
         interp_mode,
+        title: cli.title,
     };
 
     let event_loop = EventLoop::new()?;

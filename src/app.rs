@@ -55,6 +55,7 @@ pub struct AppConfig {
     pub colormap:    Colormap,
     pub norm_mode:   NormMode,
     pub interp_mode: InterpMode,
+    pub title:       Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +83,9 @@ pub struct App {
     colormap:        Colormap,
     zoom:            f32,
     pan:             [f32; 2],
+
+    // User-supplied title (shown top-left)
+    title:           Option<String>,
 
     // Playback control
     paused:          bool,
@@ -114,6 +118,7 @@ impl App {
             colormap:        config.colormap,
             zoom:            1.0,
             pan:             [0.0, 0.0],
+            title:           config.title,
             paused:          false,
             stdin_rx:        config.stdin_rx,
             stream_w:        0,
@@ -424,8 +429,9 @@ impl ApplicationHandler for App {
                 let mut pan  = self.pan;
                 let window   = self.window.as_ref().unwrap();
                 let raw_input = self.egui_winit.as_mut().unwrap().take_egui_input(window);
+                let title = self.title.as_deref();
                 let full_output = self.egui_ctx.run(raw_input, |ctx| {
-                    ui::build(ctx, vmin, vmax, colormap, &mut zoom, &mut pan);
+                    ui::build(ctx, vmin, vmax, colormap, &mut zoom, &mut pan, title);
                 });
                 self.zoom = zoom;
                 self.pan  = pan;

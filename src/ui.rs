@@ -8,12 +8,13 @@ use crate::colormap::Colormap;
 /// `egui::Context::run` closure and write them back after, to avoid a borrow
 /// conflict with the context.
 pub fn build(
-    ctx:     &egui::Context,
-    vmin:    f32,
-    vmax:    f32,
+    ctx:      &egui::Context,
+    vmin:     f32,
+    vmax:     f32,
     colormap: Colormap,
-    zoom:    &mut f32,
-    pan:     &mut [f32; 2],
+    zoom:     &mut f32,
+    pan:      &mut [f32; 2],
+    title:    Option<&str>,
 ) {
     ctx.set_visuals(egui::Visuals::dark());
 
@@ -56,7 +57,33 @@ pub fn build(
             let painter = ui.painter();
             draw_axis_ticks(painter, panel_rect, screen_rect, *zoom, pan);
             draw_colorbar(painter, panel_rect, vmin, vmax, colormap);
+            if let Some(t) = title {
+                draw_title(painter, panel_rect, t);
+            }
         });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Title label  (top-left corner, semi-transparent)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn draw_title(painter: &egui::Painter, panel: egui::Rect, title: &str) {
+    let pos = egui::pos2(panel.left() + 10.0, panel.top() + 8.0);
+    // Shadow for legibility on any background.
+    painter.text(
+        egui::pos2(pos.x + 1.0, pos.y + 1.0),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(15.0),
+        egui::Color32::from_black_alpha(160),
+    );
+    painter.text(
+        pos,
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(15.0),
+        egui::Color32::from_rgba_unmultiplied(240, 240, 240, 220),
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
