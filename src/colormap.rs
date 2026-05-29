@@ -47,12 +47,17 @@ impl Colormap {
 // Each entry: (normalised position t, [R, G, B]) in linear float.
 // Positions must be in ascending order; first ≤ 0 and last ≥ 1.
 
+// Redesigned heat: black → dark red → red → orange → yellow.
+// No white endpoint so orange/yellow remain visible at peak values.
+// Orange spans ~0.55–0.85 (was crammed into 0.60–0.80 before).
 static HEAT: &[(f32, [f32; 3])] = &[
     (0.00, [0.000, 0.000, 0.000]),   // black
-    (0.33, [1.000, 0.000, 0.000]),   // red
-    (0.60, [1.000, 0.450, 0.000]),   // orange
-    (0.80, [1.000, 1.000, 0.000]),   // yellow
-    (1.00, [1.000, 1.000, 1.000]),   // white
+    (0.25, [0.500, 0.000, 0.000]),   // dark red
+    (0.45, [1.000, 0.050, 0.000]),   // red
+    (0.62, [1.000, 0.380, 0.000]),   // orange-red
+    (0.78, [1.000, 0.680, 0.000]),   // orange
+    (0.90, [1.000, 0.930, 0.000]),   // yellow
+    (1.00, [1.000, 1.000, 0.550]),   // pale yellow (not white)
 ];
 
 static GRAYSCALE: &[(f32, [f32; 3])] = &[
@@ -69,13 +74,25 @@ static INFERNO: &[(f32, [f32; 3])] = &[
     (1.00, [0.988, 0.998, 0.645]),
 ];
 
-// Approximated from matplotlib's Viridis (perceptually uniform, blue→yellow).
+// Sampled from the canonical matplotlib viridis LUT at 16 equally-spaced points.
+// Many more stops than before to capture the mid-range teal/green shift accurately.
 static VIRIDIS: &[(f32, [f32; 3])] = &[
-    (0.00, [0.267, 0.005, 0.329]),
-    (0.25, [0.229, 0.322, 0.545]),
-    (0.50, [0.128, 0.566, 0.551]),
-    (0.75, [0.370, 0.788, 0.384]),
-    (1.00, [0.993, 0.906, 0.144]),
+    (0.000, [0.267, 0.005, 0.329]),  // dark purple
+    (0.067, [0.279, 0.128, 0.422]),  // purple
+    (0.133, [0.274, 0.221, 0.491]),  // blue-purple
+    (0.200, [0.244, 0.299, 0.535]),  // slate blue
+    (0.267, [0.205, 0.371, 0.553]),  // muted blue
+    (0.333, [0.163, 0.439, 0.557]),  // steel blue
+    (0.400, [0.128, 0.504, 0.544]),  // teal-blue
+    (0.467, [0.123, 0.566, 0.519]),  // teal
+    (0.533, [0.157, 0.626, 0.482]),  // teal-green
+    (0.600, [0.233, 0.681, 0.427]),  // medium green
+    (0.667, [0.338, 0.728, 0.356]),  // green
+    (0.733, [0.457, 0.767, 0.270]),  // yellow-green
+    (0.800, [0.575, 0.796, 0.179]),  // chartreuse
+    (0.867, [0.694, 0.819, 0.107]),  // lime
+    (0.933, [0.820, 0.868, 0.113]),  // bright lime
+    (1.000, [0.993, 0.906, 0.144]),  // yellow
 ];
 
 // Approximated from matplotlib's RdBu (diverging, red→neutral→blue).

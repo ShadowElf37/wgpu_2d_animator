@@ -83,6 +83,9 @@ pub struct App {
     zoom:            f32,
     pan:             [f32; 2],
 
+    // Playback control
+    paused:          bool,
+
     // Stdin streaming
     stdin_rx:        Option<mpsc::Receiver<MxfrFrame>>,
     stream_w:        u32,
@@ -111,6 +114,7 @@ impl App {
             colormap:        config.colormap,
             zoom:            1.0,
             pan:             [0.0, 0.0],
+            paused:          false,
             stdin_rx:        config.stdin_rx,
             stream_w:        0,
             stream_h:        0,
@@ -137,12 +141,14 @@ impl App {
         } else {
             String::new()
         };
+        let paused_str = if self.paused { " | PAUSED" } else { "" };
         w.set_title(&format!(
-            "wgpu_animator — norm: {} | interp: {} | cmap: {}{}",
+            "wgpu_animator — norm: {} | interp: {} | cmap: {}{}{}",
             self.norm_mode.label(),
             self.interp_mode.label(),
             self.colormap.label(),
             frame_info,
+            paused_str,
         ));
     }
 
@@ -316,6 +322,57 @@ impl ApplicationHandler for App {
                 self.update_title();
             }
 
+            // Space: toggle pause/play
+            WindowEvent::KeyboardInput {
+                event: KeyEvent {
+                    logical_key: Key::Named(NamedKey::Space),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+                ..
+            } => {
+                self.paused = !self.paused;
+                if !self.paused {
+                    // Reset the timer so we don't skip frames after unpausing
+                    self.next_anim_frame = None;
+                }
+                log::info!("{}", if self.paused { "paused" } else { "playing" });
+                self.update_title();
+            }
+
+            // Left arrow: go to previous frame (and pause)
+            WindowEvent::KeyboardInput {
+                event: KeyEvent {
+                    logical_key: Key::Named(NamedKey::ArrowLeft),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+                ..
+            } => {
+                if !self.frames.is_empty() {
+                    self.paused    = true;
+                    let n          = self.frames.len();
+                    self.frame_idx = (self.frame_idx + n - 1) % n;
+                    self.update_title();
+                }
+            }
+
+            // Right arrow: go to next frame (and pause)
+            WindowEvent::KeyboardInput {
+                event: KeyEvent {
+                    logical_key: Key::Named(NamedKey::ArrowRight),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+                ..
+            } => {
+                if !self.frames.is_empty() {
+                    self.paused    = true;
+                    self.frame_idx = (self.frame_idx + 1) % self.frames.len();
+                    self.update_title();
+                }
+            }
+
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu { gpu.resize(size); }
             }
@@ -328,7 +385,7 @@ impl ApplicationHandler for App {
                 self.try_init_gpu_data();
 
                 // ── 3. Animation frame advance ────────────────────────────
-                if !self.frames.is_empty() && self.gpu_initialized {
+                if !self.frames.is_empty() && self.gpu_initialized && !self.paused {
                     let now           = Instant::now();
                     let frame_dur     = Duration::from_secs_f64(1.0 / self.fps);
                     let due           = self.next_anim_frame.get_or_insert(now + frame_dur);

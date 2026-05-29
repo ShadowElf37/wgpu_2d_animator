@@ -1,7 +1,11 @@
 wgpu_animator — keyboard controls
 ──────────────────────────────────
+Space    pause / resume playback
+←  →     step one frame back / forward (also pauses)
+
 N        cycle normalization mode  (global → per-frame → percentile → fixed)
 I        cycle interpolation mode  (nearest → linear → bicubic)
+C        cycle colormap
 R        reset zoom and pan
 
 scroll   zoom toward cursor
