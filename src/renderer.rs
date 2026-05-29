@@ -14,7 +14,7 @@ struct Uniforms {
     vmin:        f32,
     vmax:        f32,
     interp_mode: u32,
-    _pad:        f32,
+    channels:    u32,
     pan:         [f32; 2],
     zoom:        f32,
     _pad2:       f32,
@@ -37,6 +37,7 @@ pub struct DataPipeline {
     _cmap_sampler: wgpu::Sampler,
     pub width:     u32,
     pub height:    u32,
+    pub channels:  u32,
 }
 
 impl DataPipeline {
@@ -47,6 +48,7 @@ impl DataPipeline {
         width:          u32,
         height:         u32,
         colormap:       Colormap,
+        channels:       u32,
     ) -> Self {
         // ── Shader ───────────────────────────────────────────────────────
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -143,14 +145,19 @@ impl DataPipeline {
             cache:         None,
         });
 
-        // ── Data texture (R32Float, 2D) ───────────────────────────────────
+        // ── Data texture — R32Float for scalar, Rgba32Float for RGB ──────
+        let tex_format = if channels == 3 {
+            wgpu::TextureFormat::Rgba32Float
+        } else {
+            wgpu::TextureFormat::R32Float
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label:           Some("data texture"),
             size:            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count:    1,
             dimension:       wgpu::TextureDimension::D2,
-            format:          wgpu::TextureFormat::R32Float,
+            format:          tex_format,
             usage:           wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats:    &[],
         });
@@ -225,6 +232,7 @@ impl DataPipeline {
             _cmap_sampler: cmap_sampler,
             width,
             height,
+            channels,
         }
     }
 
@@ -253,7 +261,8 @@ impl DataPipeline {
     }
 
     /// Upload a new frame, normalization range, interpolation mode, and zoom/pan.
-    /// `data` must be `width * height` f32 values, row-major.
+    /// For scalar (channels==1): `data` is `width * height` f32 values.
+    /// For RGB (channels==3): `data` is `width * height * 3` f32 values (R,G,B interleaved, [0,1]).
     pub fn upload(
         &self,
         queue:       &wgpu::Queue,
@@ -264,25 +273,49 @@ impl DataPipeline {
         pan:         [f32; 2],
         zoom:        f32,
     ) {
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture:   &self.texture,
-                mip_level: 0,
-                origin:    wgpu::Origin3d::ZERO,
-                aspect:    wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(data),
-            wgpu::ImageDataLayout {
-                offset:         0,
-                bytes_per_row:  Some(self.width * 4),
-                rows_per_image: Some(self.height),
-            },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
-        );
+        if self.channels == 3 {
+            // Pack RGB → RGBA for Rgba32Float texture.
+            let rgba: Vec<f32> = data.chunks_exact(3)
+                .flat_map(|c| [c[0], c[1], c[2], 1.0_f32])
+                .collect();
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture:   &self.texture,
+                    mip_level: 0,
+                    origin:    wgpu::Origin3d::ZERO,
+                    aspect:    wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&rgba),
+                wgpu::ImageDataLayout {
+                    offset:         0,
+                    bytes_per_row:  Some(self.width * 16), // 4 channels * 4 bytes
+                    rows_per_image: Some(self.height),
+                },
+                wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            );
+        } else {
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture:   &self.texture,
+                    mip_level: 0,
+                    origin:    wgpu::Origin3d::ZERO,
+                    aspect:    wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(data),
+                wgpu::ImageDataLayout {
+                    offset:         0,
+                    bytes_per_row:  Some(self.width * 4),
+                    rows_per_image: Some(self.height),
+                },
+                wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            );
+        }
         queue.write_buffer(
             &self.uniform_buf,
             0,
-            bytemuck::bytes_of(&Uniforms { vmin, vmax, interp_mode, _pad: 0.0, pan, zoom, _pad2: 0.0 }),
+            bytemuck::bytes_of(&Uniforms {
+                vmin, vmax, interp_mode, channels: self.channels, pan, zoom, _pad2: 0.0,
+            }),
         );
     }
 
@@ -371,9 +404,10 @@ impl GpuState {
         vmax:        f32,
         colormap:    Colormap,
         interp_mode: u32,
+        channels:    u32,
     ) {
         let dp = DataPipeline::new(
-            &self.device, &self.queue, self.config.format, width, height, colormap,
+            &self.device, &self.queue, self.config.format, width, height, colormap, channels,
         );
         dp.upload(&self.queue, data, vmin, vmax, interp_mode, [0.0, 0.0], 1.0);
         self.data_pipeline = Some(dp);

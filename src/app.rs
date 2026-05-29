@@ -56,6 +56,7 @@ pub struct AppConfig {
     pub norm_mode:   NormMode,
     pub interp_mode: InterpMode,
     pub title:       Option<String>,
+    pub bare:        bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,10 +91,14 @@ pub struct App {
     // Playback control
     paused:          bool,
 
+    // Bare mode: no colorbar/axis ticks overlay
+    bare:            bool,
+
     // Stdin streaming
     stdin_rx:        Option<mpsc::Receiver<MxfrFrame>>,
     stream_w:        u32,
     stream_h:        u32,
+    stream_channels: u32,
     gpu_initialized: bool,  // true once init_data has been called
 
     // egui
@@ -120,9 +125,11 @@ impl App {
             pan:             [0.0, 0.0],
             title:           config.title,
             paused:          false,
+            bare:            config.bare,
             stdin_rx:        config.stdin_rx,
             stream_w:        0,
             stream_h:        0,
+            stream_channels: 1,
             gpu_initialized: false,
             egui_ctx:        egui::Context::default(),
             egui_winit:      None,
@@ -182,8 +189,9 @@ impl App {
         let got_new = !incoming.is_empty();
         for frame in incoming {
             if self.stream_w == 0 {
-                self.stream_w = frame.width;
-                self.stream_h = frame.height;
+                self.stream_w        = frame.width;
+                self.stream_h        = frame.height;
+                self.stream_channels = frame.channels;
             }
             self.timestamps.push(frame.timestamp);
             self.frames.push(frame.data);
@@ -218,7 +226,7 @@ impl App {
         let (vmin, vmax) = norm::frame_range(
             &self.frames[0], self.norm_mode, self.global_range, self.fixed_range,
         );
-        gpu.init_data(w, h, &self.frames[0], vmin, vmax, self.colormap, self.interp_mode.as_u32());
+        gpu.init_data(w, h, &self.frames[0], vmin, vmax, self.colormap, self.interp_mode.as_u32(), self.stream_channels);
         self.gpu_initialized = true;
     }
 }
@@ -430,8 +438,9 @@ impl ApplicationHandler for App {
                 let window   = self.window.as_ref().unwrap();
                 let raw_input = self.egui_winit.as_mut().unwrap().take_egui_input(window);
                 let title = self.title.as_deref();
+                let bare  = self.bare;
                 let full_output = self.egui_ctx.run(raw_input, |ctx| {
-                    ui::build(ctx, vmin, vmax, colormap, &mut zoom, &mut pan, title);
+                    ui::build(ctx, vmin, vmax, colormap, &mut zoom, &mut pan, title, bare);
                 });
                 self.zoom = zoom;
                 self.pan  = pan;

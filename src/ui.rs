@@ -15,6 +15,7 @@ pub fn build(
     zoom:     &mut f32,
     pan:      &mut [f32; 2],
     title:    Option<&str>,
+    bare:     bool,
 ) {
     ctx.set_visuals(egui::Visuals::dark());
 
@@ -55,8 +56,10 @@ pub fn build(
             }
 
             let painter = ui.painter();
-            draw_axis_ticks(painter, panel_rect, screen_rect, *zoom, pan);
-            draw_colorbar(painter, panel_rect, vmin, vmax, colormap);
+            if !bare {
+                draw_axis_ticks(painter, panel_rect, screen_rect, *zoom, pan);
+                draw_colorbar(painter, panel_rect, vmin, vmax, colormap);
+            }
             if let Some(t) = title {
                 draw_title(painter, panel_rect, t);
             }

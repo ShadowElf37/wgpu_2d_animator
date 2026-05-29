@@ -40,6 +40,10 @@ struct Cli {
     /// Title text shown in the top-left corner of the animation window
     #[arg(long)]
     title: Option<String>,
+
+    /// Bare mode: hide colorbar and axis-tick overlays (used for image display)
+    #[arg(long)]
+    bare: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -85,6 +89,7 @@ fn main() -> anyhow::Result<()> {
         norm_mode,
         interp_mode,
         title: cli.title,
+        bare: cli.bare,
     };
 
     let event_loop = EventLoop::new()?;

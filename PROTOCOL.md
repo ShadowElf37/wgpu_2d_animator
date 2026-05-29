@@ -18,6 +18,8 @@ cargo run --release -- --stdin [options]
 | `--colormap <name>` | heat | Starting colormap (see list below) |
 | `--norm <mode>` | global | Normalization mode (see list below) |
 | `--interp <mode>` | nearest | Interpolation mode (see list below) |
+| `--title <text>` | none | Text shown in the top-left corner |
+| `--bare` | off | Hide colorbar and axis-tick overlays |
 
 Typical invocation:
 
@@ -34,19 +36,23 @@ producer's stdout, which becomes the animator's stdin).  Fields are
 little-endian.
 
 ```
-Offset   Size   Type      Field
-──────   ────   ────────  ─────────────────────────────────────
-     0      4   u8[4]     Magic bytes: exactly b"MXFR"
-     4      4   u32 LE    Width  W  (pixels, must be ≥ 1)
-     8      4   u32 LE    Height H  (pixels, must be ≥ 1)
-    12      8   f64 LE    Timestamp (arbitrary physical units; shown in UI)
-    20   W×H×4  f32 LE[]  Pixel data — W×H single-precision floats,
-                           row-major, top row first
-                           (row 0 = y_max in physical coordinates if you
-                           wrote the array with [::-1] as maxwell_loop.py does)
+Offset    Size       Type      Field
+──────    ────       ────────  ─────────────────────────────────────
+     0       4       u8[4]     Magic bytes: exactly b"MXFR"
+     4       4       u32 LE    Width  W  (pixels, must be ≥ 1)
+     8       4       u32 LE    Height H  (pixels, must be ≥ 1)
+    12       4       u32 LE    Channels C  (1 = scalar, 3 = RGB)
+    16       8       f64 LE    Timestamp (arbitrary physical units; shown in UI)
+    24   W×H×C×4    f32 LE[]  Pixel data — W×H×C single-precision floats,
+                               row-major, top row first; for C=3 the order is
+                               R,G,B per pixel in [0,1] range
 ```
 
-Total frame size: **20 + W × H × 4** bytes.
+Total frame size: **24 + W × H × C × 4** bytes.
+
+**Channels:**
+- `C = 1` (scalar): single float per pixel, mapped through the colormap LUT after normalization.
+- `C = 3` (RGB): three floats per pixel `[R, G, B]` in [0, 1]. Colormap and normalization are bypassed; pixels are displayed directly.
 
 Width and height may change between frames.  The animator re-initialises
 the GPU texture on the first frame and accepts only frames whose dimensions
@@ -60,15 +66,19 @@ import struct, sys, numpy as np
 _MAGIC = b'MXFR'
 
 def write_frame(data: np.ndarray, timestamp: float = 0.0) -> None:
-    """Write one 2D float32 frame to stdout in MXFR format.
+    """Write one frame to stdout in MXFR format.
 
-    data      -- 2-D numpy array, shape (H, W).  Row 0 is the top of the
-                 image as displayed.  Pass data[::-1] if your array is
-                 stored with physical y=0 at row 0 (bottom-up convention).
+    data      -- 2-D array (H, W) for scalar, or 3-D array (H, W, 3) for RGB.
+                 Row 0 is the top of the image as displayed.
+                 For RGB, values must be in [0, 1] as float32.
     timestamp -- arbitrary scalar shown in the window title (e.g. sim time).
     """
-    h, w = data.shape
-    header = struct.pack('<4sIId', _MAGIC, w, h, timestamp)
+    if data.ndim == 3:
+        h, w, c = data.shape
+    else:
+        h, w = data.shape
+        c = 1
+    header = struct.pack('<4sIIId', _MAGIC, w, h, c, timestamp)
     sys.stdout.buffer.write(header)
     sys.stdout.buffer.write(np.ascontiguousarray(data, dtype='<f4').tobytes())
     sys.stdout.buffer.flush()
@@ -173,7 +183,7 @@ _MAGIC = b'MXFR'
 
 def write_frame(data, t):
     h, w = data.shape
-    sys.stdout.buffer.write(struct.pack('<4sIId', _MAGIC, w, h, t))
+    sys.stdout.buffer.write(struct.pack('<4sIIId', _MAGIC, w, h, 1, t))
     sys.stdout.buffer.write(np.ascontiguousarray(data, dtype='<f4').tobytes())
     sys.stdout.buffer.flush()
 

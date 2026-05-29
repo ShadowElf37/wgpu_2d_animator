@@ -7,7 +7,7 @@ struct Uniforms {
     vmin:        f32,
     vmax:        f32,
     interp_mode: u32,        // 0 = nearest, 1 = bilinear, 2 = bicubic (Catmull-Rom)
-    _pad:        f32,
+    channels:    u32,        // 1 = scalar (LUT path), 3 = RGB passthrough
     pan:         vec2<f32>,  // view centre offset in data-UV space
     zoom:        f32,        // scale factor (> 1 = zoomed in)
     _pad2:       f32,
@@ -124,6 +124,15 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     }
 
     let dims = vec2<i32>(textureDimensions(data_tex));
+
+    // RGB passthrough: data texture is Rgba32Float, return colour directly.
+    if u.channels == 3u {
+        let coord = clamp(vec2<i32>(data_uv * vec2<f32>(dims)), vec2<i32>(0), dims - vec2<i32>(1));
+        let col = textureLoad(data_tex, coord, 0);
+        return vec4<f32>(col.rgb, 1.0);
+    }
+
+    // Scalar → colormap LUT path.
     var raw: f32;
     if u.interp_mode == 1u {
         raw = sample_linear(data_uv, dims);
