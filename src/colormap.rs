@@ -74,25 +74,26 @@ static INFERNO: &[(f32, [f32; 3])] = &[
     (1.00, [0.988, 0.998, 0.645]),
 ];
 
-// Sampled from the canonical matplotlib viridis LUT at 16 equally-spaced points.
-// Many more stops than before to capture the mid-range teal/green shift accurately.
+// Sampled from the actual matplotlib viridis LUT (_cm_listed.py) at 16 equally-spaced
+// indices (0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255).
+// Previous version had red/green too high in the purple range, making it look washed out.
 static VIRIDIS: &[(f32, [f32; 3])] = &[
-    (0.000, [0.267, 0.005, 0.329]),  // dark purple
-    (0.067, [0.279, 0.128, 0.422]),  // purple
-    (0.133, [0.274, 0.221, 0.491]),  // blue-purple
-    (0.200, [0.244, 0.299, 0.535]),  // slate blue
-    (0.267, [0.205, 0.371, 0.553]),  // muted blue
-    (0.333, [0.163, 0.439, 0.557]),  // steel blue
-    (0.400, [0.128, 0.504, 0.544]),  // teal-blue
-    (0.467, [0.123, 0.566, 0.519]),  // teal
-    (0.533, [0.157, 0.626, 0.482]),  // teal-green
-    (0.600, [0.233, 0.681, 0.427]),  // medium green
-    (0.667, [0.338, 0.728, 0.356]),  // green
-    (0.733, [0.457, 0.767, 0.270]),  // yellow-green
-    (0.800, [0.575, 0.796, 0.179]),  // chartreuse
-    (0.867, [0.694, 0.819, 0.107]),  // lime
-    (0.933, [0.820, 0.868, 0.113]),  // bright lime
-    (1.000, [0.993, 0.906, 0.144]),  // yellow
+    (0.000, [0.267, 0.005, 0.329]),  // #440154 dark purple
+    (0.067, [0.276, 0.100, 0.422]),  // #46197c purple (green was too high before)
+    (0.133, [0.244, 0.180, 0.487]),  // #3e2e7c blue-purple
+    (0.200, [0.207, 0.258, 0.537]),  // #354284 slate blue
+    (0.267, [0.170, 0.327, 0.553]),  // #2b538d muted blue
+    (0.333, [0.135, 0.393, 0.557]),  // #22648e steel blue
+    (0.400, [0.106, 0.453, 0.547]),  // #1b748b teal-blue
+    (0.467, [0.110, 0.512, 0.525]),  // #1d8384 teal
+    (0.533, [0.146, 0.571, 0.494]),  // #25927e teal-green
+    (0.600, [0.220, 0.629, 0.447]),  // #38a172 medium green
+    (0.667, [0.326, 0.683, 0.389]),  // #53ae63 green
+    (0.733, [0.441, 0.730, 0.314]),  // #71ba50 yellow-green
+    (0.800, [0.555, 0.769, 0.227]),  // #8ec43a chartreuse
+    (0.867, [0.669, 0.806, 0.140]),  // #abcd24 lime
+    (0.933, [0.798, 0.857, 0.095]),  // #ccdb18 bright lime
+    (1.000, [0.993, 0.906, 0.144]),  // #fde725 yellow
 ];
 
 // Approximated from matplotlib's RdBu (diverging, red→neutral→blue).
