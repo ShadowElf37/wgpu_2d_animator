@@ -27,20 +27,24 @@ impl NormMode {
     }
 }
 
-/// Scan all frames to find the global min/max.
+/// Scan all frames to find the global finite min/max (NaN and ±inf are ignored).
 pub fn global_range(frames: &[Vec<f32>]) -> (f32, f32) {
     let mut mn = f32::INFINITY;
     let mut mx = f32::NEG_INFINITY;
     for frame in frames {
         for &v in frame {
-            if v < mn { mn = v; }
-            if v > mx { mx = v; }
+            if v.is_finite() {
+                if v < mn { mn = v; }
+                if v > mx { mx = v; }
+            }
         }
     }
     (mn, mx)
 }
 
 /// Compute the vmin/vmax pair for a single frame given the active mode.
+/// Non-finite values (NaN, ±inf) are excluded from all range calculations;
+/// the shader clamps them to colormap min/max via the normal clamp(t, 0, 1).
 pub fn frame_range(
     data:   &[f32],
     mode:   NormMode,
@@ -51,14 +55,21 @@ pub fn frame_range(
         NormMode::Global     => global,
         NormMode::Fixed      => fixed,
         NormMode::PerFrame   => {
-            let mn = data.iter().cloned().fold(f32::INFINITY,     f32::min);
-            let mx = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut mn = f32::INFINITY;
+            let mut mx = f32::NEG_INFINITY;
+            for &v in data {
+                if v.is_finite() {
+                    if v < mn { mn = v; }
+                    if v > mx { mx = v; }
+                }
+            }
             (mn, mx)
         }
         NormMode::Percentile => {
-            let mut sorted: Vec<f32> = data.to_vec();
-            sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mut sorted: Vec<f32> = data.iter().cloned().filter(|v| v.is_finite()).collect();
+            sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
             let n  = sorted.len();
+            if n == 0 { return (0.0, 1.0); }
             let lo = sorted[((0.02 * n as f32) as usize).min(n - 1)];
             let hi = sorted[((0.98 * n as f32) as usize).min(n - 1)];
             (lo, hi)

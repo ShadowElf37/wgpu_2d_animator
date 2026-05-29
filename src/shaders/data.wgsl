@@ -132,7 +132,13 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     } else {
         raw = sample_nearest(data_uv, dims);
     }
-    let t   = clamp((raw - u.vmin) / (u.vmax - u.vmin), 0.0, 1.0);
+    // NaN/inf: map inf→1 (colormap max), -inf→0, NaN→0 (colormap min).
+    var t: f32;
+    if raw != raw {          // NaN check (NaN != NaN is always true in IEEE 754)
+        t = 0.0;
+    } else {
+        t = clamp((raw - u.vmin) / (u.vmax - u.vmin), 0.0, 1.0);
+    }
     let col = textureSample(cmap_tex, cmap_samp, t);
     return vec4<f32>(col.rgb, 1.0);
 }
