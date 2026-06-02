@@ -53,6 +53,37 @@ pub fn spawn_reader() -> mpsc::Receiver<MxfrFrame> {
     rx
 }
 
+/// Like `spawn_reader`, but uses a *bounded* channel of `cap` frames.  When the
+/// channel is full the reader thread blocks on `send`, which stops it draining
+/// stdin, which fills the OS pipe, which finally blocks the producer's `write`.
+/// This gives end-to-end backpressure: the solver only runs ahead of playback
+/// by at most `cap` frames, so an unbounded ("forever") stream uses bounded
+/// memory.  Used by `!animate2Dforever`.
+pub fn spawn_reader_bounded(cap: usize) -> mpsc::Receiver<MxfrFrame> {
+    let (tx, rx) = mpsc::sync_channel(cap);
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut rd = BufReader::with_capacity(4 << 20, stdin.lock());
+        loop {
+            match read_frame(&mut rd) {
+                Ok(frame) => {
+                    if tx.send(frame).is_err() {
+                        break; // receiver dropped — window was closed
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    break; // clean EOF — solver finished
+                }
+                Err(e) => {
+                    eprintln!("mxfr reader: {e}");
+                    break;
+                }
+            }
+        }
+    });
+    rx
+}
+
 fn read_frame(r: &mut impl Read) -> io::Result<MxfrFrame> {
     let mut magic = [0u8; 4];
     r.read_exact(&mut magic)?;

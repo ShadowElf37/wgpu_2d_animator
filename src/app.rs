@@ -57,6 +57,7 @@ pub struct AppConfig {
     pub interp_mode: InterpMode,
     pub title:       Option<String>,
     pub bare:        bool,
+    pub streaming:   bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,6 +95,11 @@ pub struct App {
     // Bare mode: no colorbar/axis ticks overlay
     bare:            bool,
 
+    // Live-stream mode (--stream): keep only the current frame, pull one per
+    // tick, never accumulate.  Backpressure happens upstream in the bounded
+    // reader channel.
+    streaming:       bool,
+
     // Stdin streaming
     stdin_rx:        Option<mpsc::Receiver<MxfrFrame>>,
     stream_w:        u32,
@@ -126,6 +132,7 @@ impl App {
             title:           config.title,
             paused:          false,
             bare:            config.bare,
+            streaming:       config.streaming,
             stdin_rx:        config.stdin_rx,
             stream_w:        0,
             stream_h:        0,
@@ -141,7 +148,13 @@ impl App {
     fn update_title(&self) {
         let Some(w) = &self.window else { return };
         let n = self.frames.len();
-        let frame_info = if n > 0 {
+        let frame_info = if self.streaming {
+            if self.timestamps.is_empty() {
+                " | streaming…".into()
+            } else {
+                format!(" | streaming | t={:.3}", self.timestamps[0])
+            }
+        } else if n > 0 {
             let idx = self.frame_idx + 1;
             if !self.timestamps.is_empty() {
                 format!(" | frame {idx}/{n} | t={:.3}", self.timestamps[self.frame_idx.min(self.timestamps.len()-1)])
@@ -206,6 +219,42 @@ impl App {
         }
 
         got_new
+    }
+
+    /// Live-stream mode: pull at most ONE frame from the bounded channel and
+    /// make it the current (only) frame.  Old frames are discarded — memory is
+    /// bounded to a single frame here; the producer's lookahead is bounded by
+    /// the channel capacity.  Returns true if a new frame was set.
+    fn pull_stream_frame(&mut self) -> bool {
+        let frame = {
+            let Some(rx) = self.stdin_rx.as_ref() else { return false; };
+            match rx.try_recv() {
+                Ok(f)                                 => f,
+                Err(mpsc::TryRecvError::Empty)        => return false,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.stdin_rx = None;
+                    return false;
+                }
+            }
+        };
+
+        if self.stream_w == 0 {
+            self.stream_w        = frame.width;
+            self.stream_h        = frame.height;
+            self.stream_channels = frame.channels;
+        }
+        // Running global range over frames seen so far (bounded memory).
+        self.global_range = norm::extend_range(self.global_range, &frame.data);
+
+        if self.frames.is_empty() {
+            self.frames.push(frame.data);
+            self.timestamps.push(frame.timestamp);
+        } else {
+            self.frames[0]     = frame.data;
+            self.timestamps[0] = frame.timestamp;
+        }
+        self.frame_idx = 0;
+        true
     }
 
     /// Initialize the GPU data pipeline from either test animation or the
@@ -387,22 +436,46 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                // ── 1. Pull new stdin frames ──────────────────────────────
-                self.poll_stdin();
+                if self.streaming {
+                    // ── Live stream: keep only the current frame ──────────
+                    // Pull the very first frame eagerly so the GPU can init.
+                    if self.frames.is_empty() {
+                        self.pull_stream_frame();
+                    }
+                    self.try_init_gpu_data();
+                    // Advance at fps by pulling the NEXT frame each tick.  While
+                    // paused (or between ticks) we don't pull, so the bounded
+                    // channel fills and the producer is throttled.
+                    if self.gpu_initialized && !self.paused {
+                        let now       = Instant::now();
+                        let frame_dur = Duration::from_secs_f64(1.0 / self.fps);
+                        let mut due   = *self.next_anim_frame.get_or_insert(now + frame_dur);
+                        if now >= due {
+                            self.pull_stream_frame();
+                            due += frame_dur;
+                            if due < now { due = now + frame_dur; }
+                            self.next_anim_frame = Some(due);
+                            self.update_title();
+                        }
+                    }
+                } else {
+                    // ── 1. Pull new stdin frames ──────────────────────────
+                    self.poll_stdin();
 
-                // ── 2. Lazy GPU init on first frame ───────────────────────
-                self.try_init_gpu_data();
+                    // ── 2. Lazy GPU init on first frame ───────────────────
+                    self.try_init_gpu_data();
 
-                // ── 3. Animation frame advance ────────────────────────────
-                if !self.frames.is_empty() && self.gpu_initialized && !self.paused {
-                    let now           = Instant::now();
-                    let frame_dur     = Duration::from_secs_f64(1.0 / self.fps);
-                    let due           = self.next_anim_frame.get_or_insert(now + frame_dur);
-                    if now >= *due {
-                        self.frame_idx = (self.frame_idx + 1) % self.frames.len();
-                        *due += frame_dur;
-                        if *due < now { *due = now + frame_dur; }
-                        self.update_title();
+                    // ── 3. Animation frame advance ────────────────────────
+                    if !self.frames.is_empty() && self.gpu_initialized && !self.paused {
+                        let now           = Instant::now();
+                        let frame_dur     = Duration::from_secs_f64(1.0 / self.fps);
+                        let due           = self.next_anim_frame.get_or_insert(now + frame_dur);
+                        if now >= *due {
+                            self.frame_idx = (self.frame_idx + 1) % self.frames.len();
+                            *due += frame_dur;
+                            if *due < now { *due = now + frame_dur; }
+                            self.update_title();
+                        }
                     }
                 }
 

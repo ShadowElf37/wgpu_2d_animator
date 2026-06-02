@@ -44,6 +44,16 @@ struct Cli {
     /// Bare mode: hide colorbar and axis-tick overlays (used for image display)
     #[arg(long)]
     bare: bool,
+
+    /// Streaming mode: play a live, unbounded stream — keep only the current
+    /// frame, drop the rest, and apply backpressure so the producer never runs
+    /// more than --buffer frames ahead.  Used by `!animate2Dforever`.
+    #[arg(long)]
+    stream: bool,
+
+    /// Max frames buffered ahead of playback in --stream mode (backpressure cap)
+    #[arg(long, default_value_t = 100)]
+    buffer: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -55,8 +65,13 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let stdin_rx = if cli.stdin {
-        log::info!("stdin mode: expecting MXFR frames");
-        Some(stdin_reader::spawn_reader())
+        if cli.stream {
+            log::info!("stream mode: live frames, buffer={} (backpressure)", cli.buffer);
+            Some(stdin_reader::spawn_reader_bounded(cli.buffer.max(1)))
+        } else {
+            log::info!("stdin mode: expecting MXFR frames");
+            Some(stdin_reader::spawn_reader())
+        }
     } else {
         None
     };
@@ -91,6 +106,7 @@ fn main() -> anyhow::Result<()> {
         interp_mode,
         title: cli.title,
         bare: cli.bare,
+        streaming: cli.stream,
     };
 
     let event_loop = EventLoop::new()?;
