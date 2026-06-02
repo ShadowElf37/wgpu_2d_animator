@@ -117,7 +117,7 @@ impl App {
             fps:             config.fps,
             next_anim_frame: None,
             norm_mode:       config.norm_mode,
-            global_range:    (0.0, 1.0),
+            global_range:    (f32::INFINITY, f32::NEG_INFINITY),
             fixed_range:     (0.0, 1.0),
             interp_mode:     config.interp_mode,
             colormap:        config.colormap,
@@ -193,6 +193,9 @@ impl App {
                 self.stream_h        = frame.height;
                 self.stream_channels = frame.channels;
             }
+            // Fold each new frame into the running global range as it arrives —
+            // O(new data), not O(all buffered frames) per poll.
+            self.global_range = norm::extend_range(self.global_range, &frame.data);
             self.timestamps.push(frame.timestamp);
             self.frames.push(frame.data);
         }
@@ -200,13 +203,6 @@ impl App {
         if disconnected {
             log::info!("stdin stream ended — {} frames buffered", self.frames.len());
             self.stdin_rx = None;
-            // Compute global range now that we have all frames.
-            if !self.frames.is_empty() {
-                self.global_range = norm::global_range(&self.frames);
-            }
-        } else if got_new && matches!(self.norm_mode, NormMode::Global) {
-            // Update incrementally while frames still arrive.
-            self.global_range = norm::global_range(&self.frames);
         }
 
         got_new

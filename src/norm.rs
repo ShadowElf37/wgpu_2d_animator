@@ -29,14 +29,22 @@ impl NormMode {
 
 /// Scan all frames to find the global finite min/max (NaN and ±inf are ignored).
 pub fn global_range(frames: &[Vec<f32>]) -> (f32, f32) {
-    let mut mn = f32::INFINITY;
-    let mut mx = f32::NEG_INFINITY;
+    let mut range = (f32::INFINITY, f32::NEG_INFINITY);
     for frame in frames {
-        for &v in frame {
-            if v.is_finite() {
-                if v < mn { mn = v; }
-                if v > mx { mx = v; }
-            }
+        range = extend_range(range, frame);
+    }
+    range
+}
+
+/// Fold one frame's finite min/max into a running range. Lets the streaming path
+/// update the global range in O(new data) per poll instead of rescanning every
+/// buffered frame on every redraw (which is O(N²) over a long animation).
+pub fn extend_range(cur: (f32, f32), frame: &[f32]) -> (f32, f32) {
+    let (mut mn, mut mx) = cur;
+    for &v in frame {
+        if v.is_finite() {
+            if v < mn { mn = v; }
+            if v > mx { mx = v; }
         }
     }
     (mn, mx)

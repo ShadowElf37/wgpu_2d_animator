@@ -30,7 +30,9 @@ pub fn spawn_reader() -> mpsc::Receiver<MxfrFrame> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let stdin  = io::stdin();
-        let mut rd = BufReader::new(stdin.lock());
+        // 4 MiB buffer: large frames (e.g. 1000×1000 = 4 MB) otherwise take
+        // hundreds of tiny 8 KiB reads each, starving the render thread.
+        let mut rd = BufReader::with_capacity(4 << 20, stdin.lock());
         loop {
             match read_frame(&mut rd) {
                 Ok(frame) => {
