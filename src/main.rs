@@ -25,7 +25,7 @@ struct Cli {
     #[arg(long, default_value_t = 30.0)]
     fps: f64,
 
-    /// Colormap: heat, inferno, viridis, rdbu, grayscale
+    /// Colormap: heat, inferno, viridis, rdbu, grayscale, galaxy
     #[arg(long, default_value = "heat")]
     colormap: String,
 
@@ -66,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         "viridis"   => Colormap::Viridis,
         "rdbu"      => Colormap::RdBu,
         "grayscale" => Colormap::Grayscale,
+        "galaxy"    => Colormap::Galaxy,
         _           => Colormap::Heat,
     };
 

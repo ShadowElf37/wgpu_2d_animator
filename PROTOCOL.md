@@ -138,6 +138,7 @@ For **non-negative** magnitude fields (e.g. `|E|`, `|J|`), use `heat`,
 | `viridis` | Perceptually uniform blue-to-yellow.  Colour-blind friendly. |
 | `rdbu` | Diverging red–white–blue.  Best for signed fields centred at zero. |
 | `grayscale` | Black → white. |
+| `galaxy` | Black → dark blue → dull blue → yellow → bright pale yellow.  Starlight look for self-gravitating density fields. |
 
 Press **C** at runtime to cycle through colormaps.
 

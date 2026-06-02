@@ -1,4 +1,4 @@
-/// Five built-in colormaps, each baked into a 256-entry RGBA8 LUT.
+/// Six built-in colormaps, each baked into a 256-entry RGBA8 LUT.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Colormap {
     #[default]
@@ -7,6 +7,7 @@ pub enum Colormap {
     Viridis,
     RdBu,
     Grayscale,
+    Galaxy,
 }
 
 impl Colormap {
@@ -17,6 +18,7 @@ impl Colormap {
             Colormap::Viridis   => "viridis",
             Colormap::RdBu      => "rdbu",
             Colormap::Grayscale => "grayscale",
+            Colormap::Galaxy    => "galaxy",
         }
     }
 
@@ -26,7 +28,8 @@ impl Colormap {
             Colormap::Inferno   => Colormap::Viridis,
             Colormap::Viridis   => Colormap::RdBu,
             Colormap::RdBu      => Colormap::Grayscale,
-            Colormap::Grayscale => Colormap::Heat,
+            Colormap::Grayscale => Colormap::Galaxy,
+            Colormap::Galaxy    => Colormap::Heat,
         }
     }
 
@@ -38,6 +41,7 @@ impl Colormap {
             Colormap::Viridis   => VIRIDIS,
             Colormap::RdBu      => RDBU,
             Colormap::Grayscale => GRAYSCALE,
+            Colormap::Galaxy    => GALAXY,
         };
         build_lut(stops)
     }
@@ -63,6 +67,17 @@ static HEAT: &[(f32, [f32; 3])] = &[
 static GRAYSCALE: &[(f32, [f32; 3])] = &[
     (0.0, [0.0, 0.0, 0.0]),
     (1.0, [1.0, 1.0, 1.0]),
+];
+
+// Galaxy: black → dark blue → dull blue → yellow → bright pale yellow.
+// Reads like starlight on a dark sky — dim outskirts in deep blue, bright cores
+// glowing yellow-white. Good for self-gravitating density fields (gravity_gas).
+static GALAXY: &[(f32, [f32; 3])] = &[
+    (0.00, [0.000, 0.000, 0.000]),   // black (empty space)
+    (0.22, [0.035, 0.055, 0.200]),   // dark blue
+    (0.48, [0.200, 0.340, 0.580]),   // dull (muted steel) blue
+    (0.80, [0.950, 0.800, 0.250]),   // yellow
+    (1.00, [1.000, 0.970, 0.800]),   // bright pale yellow (hot cores)
 ];
 
 // Approximated from matplotlib's Inferno (perceptually uniform, dark→bright).
